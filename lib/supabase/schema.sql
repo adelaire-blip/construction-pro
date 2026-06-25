@@ -95,6 +95,28 @@ create or replace trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
+-- ============================================================
+-- Fonctions SECURITY DEFINER (contournent le RLS -> anti-récursion)
+-- ============================================================
+create or replace function public.is_project_member(p_project_id uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (select 1 from project_members where project_id = p_project_id and user_id = auth.uid());
+$$;
+
+create or replace function public.is_project_owner(p_project_id uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (select 1 from projects where id = p_project_id and created_by = auth.uid());
+$$;
+
+create or replace function public.can_access_floor(p_floor_id uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (
+    select 1 from floors f
+    where f.id = p_floor_id
+      and (public.is_project_owner(f.project_id) or public.is_project_member(f.project_id))
+  );
+$$;
+
 -- Row Level Security
 alter table profiles enable row level security;
 alter table projects enable row level security;
@@ -104,126 +126,44 @@ alter table annotations enable row level security;
 alter table annotation_comments enable row level security;
 alter table messages enable row level security;
 
--- RLS Policies
-create policy "Profiles are viewable by authenticated users" on profiles
-  for select using (auth.role() = 'authenticated');
+-- PROFILES
+create policy "profiles_select" on profiles for select using (auth.role() = 'authenticated');
+create policy "profiles_update_own" on profiles for update using (auth.uid() = id);
+create policy "profiles_insert_own" on profiles for insert with check (auth.uid() = id);
 
-create policy "Users can update own profile" on profiles
-  for update using (auth.uid() = id);
+-- PROJECTS
+create policy "projects_select" on projects for select using (created_by = auth.uid() or public.is_project_member(id));
+create policy "projects_insert" on projects for insert with check (created_by = auth.uid());
+create policy "projects_update" on projects for update using (created_by = auth.uid());
+create policy "projects_delete" on projects for delete using (created_by = auth.uid());
 
-create policy "Projects visible to members" on projects
-  for select using (
-    auth.uid() = created_by or
-    exists (select 1 from project_members where project_id = id and user_id = auth.uid())
-  );
+-- PROJECT_MEMBERS
+create policy "members_select" on project_members for select using (user_id = auth.uid() or public.is_project_owner(project_id));
+create policy "members_insert_self" on project_members for insert with check (user_id = auth.uid());
+create policy "members_insert_owner" on project_members for insert with check (public.is_project_owner(project_id));
+create policy "members_delete_owner" on project_members for delete using (public.is_project_owner(project_id));
 
-create policy "Admins can create projects" on projects
-  for insert with check (auth.uid() = created_by);
+-- FLOORS
+create policy "floors_select" on floors for select using (public.is_project_owner(project_id) or public.is_project_member(project_id));
+create policy "floors_all_owner" on floors for all using (public.is_project_owner(project_id)) with check (public.is_project_owner(project_id));
 
-create policy "Admins can update their projects" on projects
-  for update using (auth.uid() = created_by);
+-- ANNOTATIONS
+create policy "annotations_select" on annotations for select using (public.can_access_floor(floor_id));
+create policy "annotations_insert" on annotations for insert with check (created_by = auth.uid() and public.can_access_floor(floor_id));
+create policy "annotations_update" on annotations for update using (public.can_access_floor(floor_id));
+create policy "annotations_delete" on annotations for delete using (public.can_access_floor(floor_id));
 
-create policy "Members visible to project participants" on project_members
-  for select using (
-    exists (select 1 from project_members pm where pm.project_id = project_id and pm.user_id = auth.uid())
-    or exists (select 1 from projects p where p.id = project_id and p.created_by = auth.uid())
-  );
+-- ANNOTATION_COMMENTS
+create policy "comments_select" on annotation_comments for select using (
+  exists (select 1 from annotations a where a.id = annotation_id and public.can_access_floor(a.floor_id))
+);
+create policy "comments_insert" on annotation_comments for insert with check (created_by = auth.uid());
 
-create policy "Project owners can manage members" on project_members
-  for all using (
-    exists (select 1 from projects p where p.id = project_id and p.created_by = auth.uid())
-  );
-
-create policy "Floors visible to project members" on floors
-  for select using (
-    exists (
-      select 1 from project_members pm where pm.project_id = project_id and pm.user_id = auth.uid()
-      union
-      select 1 from projects p where p.id = project_id and p.created_by = auth.uid()
-    )
-  );
-
-create policy "Project owners can manage floors" on floors
-  for all using (
-    exists (select 1 from projects p where p.id = project_id and p.created_by = auth.uid())
-  );
-
-create policy "Annotations visible to project members" on annotations
-  for select using (
-    exists (
-      select 1 from floors f
-      join project_members pm on pm.project_id = f.project_id
-      where f.id = floor_id and pm.user_id = auth.uid()
-      union
-      select 1 from floors f
-      join projects p on p.id = f.project_id
-      where f.id = floor_id and p.created_by = auth.uid()
-    )
-  );
-
-create policy "Members can create annotations" on annotations
-  for insert with check (
-    auth.uid() = created_by and
-    exists (
-      select 1 from floors f
-      join project_members pm on pm.project_id = f.project_id
-      where f.id = floor_id and pm.user_id = auth.uid()
-      union
-      select 1 from floors f
-      join projects p on p.id = f.project_id
-      where f.id = floor_id and p.created_by = auth.uid()
-    )
-  );
-
-create policy "Members can update annotations" on annotations
-  for update using (
-    exists (
-      select 1 from floors f
-      join project_members pm on pm.project_id = f.project_id
-      where f.id = floor_id and pm.user_id = auth.uid()
-      union
-      select 1 from floors f
-      join projects p on p.id = f.project_id
-      where f.id = floor_id and p.created_by = auth.uid()
-    )
-  );
-
-create policy "Comments visible to project members" on annotation_comments
-  for select using (
-    exists (
-      select 1 from annotations a
-      join floors f on f.id = a.floor_id
-      join project_members pm on pm.project_id = f.project_id
-      where a.id = annotation_id and pm.user_id = auth.uid()
-      union
-      select 1 from annotations a
-      join floors f on f.id = a.floor_id
-      join projects p on p.id = f.project_id
-      where a.id = annotation_id and p.created_by = auth.uid()
-    )
-  );
-
-create policy "Members can add comments" on annotation_comments
-  for insert with check (auth.uid() = created_by);
-
-create policy "Messages visible to project members" on messages
-  for select using (
-    exists (
-      select 1 from project_members pm where pm.project_id = project_id and pm.user_id = auth.uid()
-      union
-      select 1 from projects p where p.id = project_id and p.created_by = auth.uid()
-    )
-  );
-
-create policy "Members can send messages" on messages
-  for insert with check (
-    auth.uid() = user_id and
-    exists (
-      select 1 from project_members pm where pm.project_id = project_id and pm.user_id = auth.uid()
-      union
-      select 1 from projects p where p.id = project_id and p.created_by = auth.uid()
-    )
-  );
+-- MESSAGES
+create policy "messages_select" on messages for select using (public.is_project_owner(project_id) or public.is_project_member(project_id));
+create policy "messages_insert" on messages for insert with check (
+  user_id = auth.uid() and (public.is_project_owner(project_id) or public.is_project_member(project_id))
+);
 
 -- Storage buckets (run in Supabase Storage section)
 -- Create bucket "plans" (public: false)
