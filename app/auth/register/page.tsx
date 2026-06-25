@@ -17,23 +17,34 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    const supabase = createClient()
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName, company } },
-    })
-    if (error) {
-      toast.error(error.message)
-    } else {
-      toast.success('Compte créé ! Vérifiez votre email.')
-      router.push('/auth/login')
+    setErrorMsg('')
+    try {
+      const supabase = createClient()
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: fullName, company } },
+      })
+      if (error) {
+        setErrorMsg(error.message)
+        toast.error(error.message)
+      } else {
+        toast.success('Compte créé !')
+        router.push('/dashboard')
+        router.refresh()
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erreur inconnue'
+      setErrorMsg(msg)
+      toast.error(msg)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
@@ -65,6 +76,11 @@ export default function RegisterPage() {
               <Label htmlFor="password">Mot de passe</Label>
               <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" minLength={6} required className="mt-1" />
             </div>
+            {errorMsg && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
+                {errorMsg}
+              </div>
+            )}
             <Button type="submit" className="w-full bg-orange-500 hover:bg-orange-600" disabled={loading}>
               {loading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
               Créer mon compte
