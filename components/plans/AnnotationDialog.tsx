@@ -88,7 +88,8 @@ export default function AnnotationDialog(props: Props) {
       .single()
 
     if (error) {
-      toast.error('Erreur lors de la création')
+      console.error('Annotation create error:', error)
+      toast.error(`Erreur: ${error.message} (${error.code})`)
     } else {
       toast.success('Annotation créée !')
       props.onCreated(data)
