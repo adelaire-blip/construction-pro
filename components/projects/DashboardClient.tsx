@@ -55,13 +55,16 @@ export default function DashboardClient({ user, profile, projects: initialProjec
       .single()
 
     if (error) {
-      toast.error('Erreur lors de la création')
+      toast.error(`Erreur projet: ${error.message} (${error.code})`)
     } else {
-      await supabase.from('project_members').insert({
+      const { error: memberError } = await supabase.from('project_members').insert({
         project_id: project.id,
         user_id: user.id,
         role: 'admin',
       })
+      if (memberError) {
+        toast.error(`Erreur membre: ${memberError.message} (${memberError.code})`)
+      }
       setProjects([project, ...projects])
       setOpen(false)
       setForm({ name: '', address: '', description: '', status: 'en_cours' })
