@@ -81,6 +81,20 @@ create table if not exists messages (
   created_at timestamptz default now()
 );
 
+-- Foreign keys vers profiles pour permettre les jointures PostgREST (profile:profiles(*))
+alter table annotations
+  add constraint annotations_created_by_profiles_fkey
+  foreign key (created_by) references profiles(id) on delete set null;
+alter table annotation_comments
+  add constraint comments_created_by_profiles_fkey
+  foreign key (created_by) references profiles(id) on delete set null;
+alter table messages
+  add constraint messages_user_id_profiles_fkey
+  foreign key (user_id) references profiles(id) on delete set null;
+alter table project_members
+  add constraint members_user_id_profiles_fkey
+  foreign key (user_id) references profiles(id) on delete cascade;
+
 -- Auto-create profile on signup
 create or replace function public.handle_new_user()
 returns trigger as $$
