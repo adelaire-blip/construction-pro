@@ -13,15 +13,20 @@ export default async function DashboardPage() {
     .eq('id', user.id)
     .single()
 
-  const { data: projects } = await supabase
+  // Le RLS limite déjà la visibilité aux projets dont l'utilisateur est
+  // propriétaire ou membre — pas besoin de filtre .or() ici.
+  const { data: projects, error } = await supabase
     .from('projects')
     .select(`
       *,
       project_members(count),
       floors(count)
     `)
-    .or(`created_by.eq.${user.id},project_members.user_id.eq.${user.id}`)
     .order('updated_at', { ascending: false })
+
+  if (error) {
+    console.error('Dashboard projects error:', error)
+  }
 
   return <DashboardClient user={user} profile={profile} projects={projects || []} />
 }
