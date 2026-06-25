@@ -64,45 +64,63 @@ export default function PlansPanel({ user, project, floors, setFloors, isOwner }
   }
 
   const handleUploadPlan = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedFloor || !e.target.files?.[0]) return
-    const file = e.target.files[0]
-    const isPdf = file.type === 'application/pdf'
+    const file = e.target.files?.[0]
+    if (!selectedFloor) {
+      toast.error('Aucun niveau sélectionné')
+      return
+    }
+    if (!file) return
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
     const isImage = file.type.startsWith('image/')
     if (!isPdf && !isImage) {
-      toast.error('Format non supporté. Utilisez PDF, PNG ou JPG.')
+      toast.error(`Format non supporté (${file.type || 'inconnu'}). Utilisez PDF, PNG ou JPG.`)
       return
     }
+
     setUploading(true)
-    const ext = file.name.split('.').pop()
-    const path = `${project.id}/${selectedFloor.id}.${ext}`
-    const { error: uploadError } = await supabase.storage
-      .from('plans')
-      .upload(path, file, { upsert: true })
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || (isPdf ? 'pdf' : 'png')
+      const path = `${project.id}/${selectedFloor.id}.${ext}`
 
-    if (uploadError) {
-      toast.error(`Erreur upload: ${uploadError.message}`)
-      setUploading(false)
-      return
-    }
+      const { error: uploadError } = await supabase.storage
+        .from('plans')
+        .upload(path, file, { upsert: true, contentType: file.type || undefined })
 
-    const { data: { publicUrl } } = supabase.storage.from('plans').getPublicUrl(path)
+      if (uploadError) {
+        console.error('Upload error:', uploadError)
+        toast.error(`Erreur upload: ${uploadError.message}`)
+        return
+      }
 
-    const { data, error } = await supabase
-      .from('floors')
-      .update({ plan_url: publicUrl, plan_type: isPdf ? 'pdf' : 'image' })
-      .eq('id', selectedFloor.id)
-      .select()
-      .single()
+      const { data: urlData } = supabase.storage.from('plans').getPublicUrl(path)
+      const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`
 
-    if (error) {
-      toast.error('Erreur lors de la mise à jour')
-    } else {
+      const { data, error } = await supabase
+        .from('floors')
+        .update({ plan_url: publicUrl, plan_type: isPdf ? 'pdf' : 'image' })
+        .eq('id', selectedFloor.id)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Floor update error:', error)
+        toast.error(`Erreur mise à jour: ${error.message}`)
+        return
+      }
+
       const updatedFloors = floors.map(f => f.id === selectedFloor.id ? data : f)
       setFloors(updatedFloors)
       setSelectedFloor(data)
-      toast.success('Plan uploadé avec succès')
+      toast.success('Plan importé avec succès')
+    } catch (err: unknown) {
+      console.error('Upload exception:', err)
+      const msg = err instanceof Error ? err.message : 'Erreur inconnue'
+      toast.error(`Erreur: ${msg}`)
+    } finally {
+      setUploading(false)
+      e.target.value = ''
     }
-    setUploading(false)
   }
 
   const currentIndex = floors.findIndex(f => f.id === selectedFloor?.id)
