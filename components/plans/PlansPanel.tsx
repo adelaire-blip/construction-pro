@@ -80,7 +80,7 @@ export default function PlansPanel({ user, project, floors, setFloors, isOwner }
       .upload(path, file, { upsert: true })
 
     if (uploadError) {
-      toast.error('Erreur lors de l\'upload')
+      toast.error(`Erreur upload: ${uploadError.message}`)
       setUploading(false)
       return
     }
