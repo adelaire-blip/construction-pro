@@ -45,8 +45,21 @@ export default function ChatPanel({ user, profile, project }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Fusionne de nouveaux messages en évitant les doublons (par id)
+  const mergeMessages = (incoming: Message[]) => {
+    setMessages(prev => {
+      const map = new Map(prev.map(m => [m.id, m]))
+      incoming.forEach(m => map.set(m.id, m))
+      return Array.from(map.values()).sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+    })
+  }
+
   useEffect(() => {
     loadMessages()
+
+    // Temps réel (si activé sur la table)
     const channel = supabase
       .channel(`chat:${project.id}`)
       .on(
@@ -58,12 +71,18 @@ export default function ChatPanel({ user, profile, project }: Props) {
             .select('*, profile:profiles(*)')
             .eq('id', payload.new.id)
             .single()
-          if (data) setMessages(prev => [...prev, data])
+          if (data) mergeMessages([data])
         }
       )
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    // Filet de sécurité : rafraîchissement automatique toutes les 4s
+    const interval = setInterval(loadMessages, 4000)
+
+    return () => {
+      supabase.removeChannel(channel)
+      clearInterval(interval)
+    }
   }, [project.id])
 
   useEffect(() => {
@@ -76,20 +95,26 @@ export default function ChatPanel({ user, profile, project }: Props) {
       .select('*, profile:profiles(*)')
       .eq('project_id', project.id)
       .order('created_at')
-    setMessages(data || [])
+    if (data) mergeMessages(data)
   }
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!text.trim()) return
     setSending(true)
-    const { error } = await supabase.from('messages').insert({
-      project_id: project.id,
-      user_id: user.id,
-      content: text.trim(),
-    })
-    if (error) toast.error('Erreur envoi')
-    else setText('')
+    const content = text.trim()
+    setText('') // vider tout de suite pour la réactivité
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({ project_id: project.id, user_id: user.id, content })
+      .select('*, profile:profiles(*)')
+      .single()
+    if (error) {
+      toast.error(`Erreur envoi: ${error.message}`)
+      setText(content) // restaurer en cas d'échec
+    } else if (data) {
+      mergeMessages([data]) // affichage immédiat
+    }
     setSending(false)
   }
 
@@ -111,13 +136,18 @@ export default function ChatPanel({ user, profile, project }: Props) {
     const { data: { publicUrl } } = supabase.storage.from('attachments').getPublicUrl(path)
     const isImage = file.type.startsWith('image/')
 
-    const { error } = await supabase.from('messages').insert({
-      project_id: project.id,
-      user_id: user.id,
-      attachment_url: publicUrl,
-      attachment_type: isImage ? 'image' : 'document',
-    })
-    if (error) toast.error('Erreur envoi')
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({
+        project_id: project.id,
+        user_id: user.id,
+        attachment_url: publicUrl,
+        attachment_type: isImage ? 'image' : 'document',
+      })
+      .select('*, profile:profiles(*)')
+      .single()
+    if (error) toast.error(`Erreur envoi: ${error.message}`)
+    else if (data) mergeMessages([data])
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
   }
