@@ -36,6 +36,7 @@ interface CreateProps {
   floorId: string
   userId: string
   position: { x: number; y: number }
+  anchor?: { x: number; y: number } | null
   onClose: () => void
   onCreated: (annotation: Annotation) => void
 }
@@ -280,13 +281,45 @@ export default function AnnotationDialog(props: Props) {
   const annotation = localAnnotation || (props.mode === 'view' ? props.annotation : null)
   const typeConfig = TYPE_OPTIONS.find(t => t.value === (annotation?.type || type))
 
+  // Popover ancré près du point cliqué (création, écrans larges)
+  const [vw, setVw] = useState(0)
+  useEffect(() => {
+    setVw(window.innerWidth)
+    const onResize = () => setVw(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const anchor = props.mode === 'create' ? props.anchor : null
+  const anchored = !!anchor && vw >= 640
+
+  let popStyle: React.CSSProperties | undefined
+  if (anchored && anchor) {
+    const W = 360
+    const margin = 12
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+    // Place à droite du point ; bascule à gauche si pas la place
+    let left = anchor.x + 18
+    if (left + W > vw - margin) left = anchor.x - W - 18
+    if (left < margin) left = margin
+    // Verticalement : centré sur le point, borné à l'écran
+    const estH = Math.min(vh * 0.8, 560)
+    let top = anchor.y - 60
+    if (top + estH > vh - margin) top = vh - estH - margin
+    if (top < margin) top = margin
+    popStyle = { position: 'fixed', left, top, width: W, maxHeight: '80vh' }
+  }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50"
+      className={anchored ? 'fixed inset-0 z-50 bg-black/10' : 'fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50'}
       onClick={props.onClose}
     >
       <div
-        className="bg-white w-full sm:w-[480px] rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[85vh] flex flex-col"
+        className={anchored
+          ? 'bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden ring-1 ring-black/5'
+          : 'bg-white w-full sm:w-[480px] rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[85vh] flex flex-col'}
+        style={popStyle}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -308,7 +341,7 @@ export default function AnnotationDialog(props: Props) {
 
         {props.mode === 'create' ? (
           /* CREATE FORM */
-          <form onSubmit={handleCreate} className="p-4 space-y-3">
+          <form onSubmit={handleCreate} className="p-4 space-y-3 overflow-y-auto">
             <div>
               <Label>Titre *</Label>
               <Input

@@ -38,6 +38,7 @@ export default function PlanViewer({ floor, user }: Props) {
   const [mode, setMode] = useState<Mode>('pan')
   const [imageSize, setImageSize] = useState({ w: 0, h: 0 })
   const [pendingClick, setPendingClick] = useState<{ x: number; y: number } | null>(null)
+  const [pendingScreen, setPendingScreen] = useState<{ x: number; y: number } | null>(null)
   const [selectedAnnotation, setSelectedAnnotation] = useState<Annotation | null>(null)
   const [showList, setShowList] = useState(false)
   const [animating, setAnimating] = useState(false)
@@ -159,6 +160,7 @@ export default function PlanViewer({ floor, user }: Props) {
         const yPct = (cy / imageSize.h) * 100
         if (xPct >= 0 && yPct >= 0 && xPct <= 100 && yPct <= 100) {
           setPendingClick({ x: xPct, y: yPct })
+          setPendingScreen({ x: e.clientX, y: e.clientY })
         }
       }
     }
@@ -383,8 +385,9 @@ export default function PlanViewer({ floor, user }: Props) {
           floorId={floor.id}
           userId={user.id}
           position={pendingClick}
-          onClose={() => setPendingClick(null)}
-          onCreated={(a) => { setAnnotations(prev => [...prev, a]); setPendingClick(null); setMode('pan') }}
+          anchor={pendingScreen}
+          onClose={() => { setPendingClick(null); setPendingScreen(null) }}
+          onCreated={(a) => { setAnnotations(prev => [...prev, a]); setPendingClick(null); setPendingScreen(null); setMode('pan') }}
         />
       )}
 
