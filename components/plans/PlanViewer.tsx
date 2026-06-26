@@ -104,8 +104,8 @@ export default function PlanViewer({ floor, user }: Props) {
   }
 
   // --- Pointeurs ---
+  // NB : pas de setPointerCapture (bug iOS Safari avec touch-action:none + transform)
   const onPointerDown = (e: React.PointerEvent) => {
-    ;(e.target as Element).setPointerCapture?.(e.pointerId)
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
     movedDist.current = 0
     if (pointers.current.size === 1) {
@@ -149,8 +149,8 @@ export default function PlanViewer({ floor, user }: Props) {
     if (pointers.current.size < 2) lastPinchDist.current = null
     if (pointers.current.size === 0) lastPan.current = null
 
-    // Clic simple en mode annotation (pas un drag)
-    if (wasSingle && mode === 'annotate' && movedDist.current < 6) {
+    // Clic simple en mode annotation (pas un drag) — tolérance tactile
+    if (wasSingle && mode === 'annotate' && movedDist.current < 12) {
       const rect = containerRef.current?.getBoundingClientRect()
       if (rect && imageSize.w > 0) {
         const cx = (e.clientX - rect.left - offset.x) / scale
@@ -162,11 +162,6 @@ export default function PlanViewer({ floor, user }: Props) {
         }
       }
     }
-  }
-
-  const handleAnnotationClick = (annotation: Annotation, e: React.MouseEvent) => {
-    e.stopPropagation()
-    setSelectedAnnotation(annotation)
   }
 
   // Centre et zoome sur une annotation (animé), puis ouvre sa fenêtre
@@ -272,7 +267,7 @@ export default function PlanViewer({ floor, user }: Props) {
               imageWidth={imageSize.w}
               imageHeight={imageSize.h}
               isFocused={focusedId === annotation.id}
-              onClick={(e) => handleAnnotationClick(annotation, e)}
+              onSelect={() => { setFocusedId(annotation.id); setSelectedAnnotation(annotation) }}
             />
           ))}
 

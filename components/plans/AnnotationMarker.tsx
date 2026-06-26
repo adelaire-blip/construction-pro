@@ -20,20 +20,27 @@ interface Props {
   imageWidth: number
   imageHeight: number
   isFocused?: boolean
-  onClick: (e: React.MouseEvent) => void
+  onSelect: () => void
 }
 
-export default function AnnotationMarker({ annotation, imageWidth, imageHeight, isFocused, onClick }: Props) {
+export default function AnnotationMarker({ annotation, imageWidth, imageHeight, isFocused, onSelect }: Props) {
   const config = TYPE_CONFIG[annotation.type] || TYPE_CONFIG.note
   const Icon = config.icon
   const x = (annotation.x / 100) * imageWidth
   const y = (annotation.y / 100) * imageHeight
+  const downPos = { current: { x: 0, y: 0 } } as { current: { x: number; y: number } }
 
   return (
     <div
       style={{ position: 'absolute', left: `${x}px`, top: `${y}px`, transform: 'translate(-50%, -100%)', zIndex: isFocused ? 30 : undefined }}
-      onClick={onClick}
-      className="cursor-pointer group"
+      // Géré via événements pointeur (le onClick natif ne se déclenche pas sur iOS Safari)
+      onPointerDown={(e) => { e.stopPropagation(); downPos.current = { x: e.clientX, y: e.clientY } }}
+      onPointerUp={(e) => {
+        e.stopPropagation()
+        const moved = Math.abs(e.clientX - downPos.current.x) + Math.abs(e.clientY - downPos.current.y)
+        if (moved < 12) onSelect()
+      }}
+      className="cursor-pointer group touch-none"
       title={annotation.title}
     >
       {/* Pin */}
