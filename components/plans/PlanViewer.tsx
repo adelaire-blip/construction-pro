@@ -4,7 +4,10 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Floor, Annotation } from '@/types'
 import { User } from '@supabase/supabase-js'
-import { ZoomIn, ZoomOut, Maximize, Hand, MapPin } from 'lucide-react'
+import {
+  ZoomIn, ZoomOut, Maximize, Hand, MapPin, List, X,
+  Bookmark, MessageSquare, AlertTriangle
+} from 'lucide-react'
 import AnnotationMarker from './AnnotationMarker'
 import AnnotationDialog from './AnnotationDialog'
 
@@ -15,6 +18,18 @@ interface Props {
 
 type Mode = 'pan' | 'annotate'
 
+const TYPE_META: Record<string, { icon: typeof Bookmark; color: string; bg: string; label: string }> = {
+  reservation: { icon: Bookmark, color: 'text-blue-600', bg: 'bg-blue-100', label: 'Réservation' },
+  note: { icon: MessageSquare, color: 'text-green-600', bg: 'bg-green-100', label: 'Note' },
+  alerte: { icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-100', label: 'Alerte' },
+}
+
+const STATUS_META: Record<string, { color: string; label: string }> = {
+  ouvert: { color: 'bg-gray-100 text-gray-600', label: 'Ouvert' },
+  en_cours: { color: 'bg-yellow-100 text-yellow-700', label: 'En cours' },
+  resolu: { color: 'bg-green-100 text-green-700', label: 'Résolu' },
+}
+
 export default function PlanViewer({ floor, user }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [annotations, setAnnotations] = useState<Annotation[]>([])
@@ -24,6 +39,9 @@ export default function PlanViewer({ floor, user }: Props) {
   const [imageSize, setImageSize] = useState({ w: 0, h: 0 })
   const [pendingClick, setPendingClick] = useState<{ x: number; y: number } | null>(null)
   const [selectedAnnotation, setSelectedAnnotation] = useState<Annotation | null>(null)
+  const [showList, setShowList] = useState(false)
+  const [animating, setAnimating] = useState(false)
+  const [focusedId, setFocusedId] = useState<string | null>(null)
 
   // Gestion des pointeurs (souris + tactile)
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map())
@@ -151,6 +169,28 @@ export default function PlanViewer({ floor, user }: Props) {
     setSelectedAnnotation(annotation)
   }
 
+  // Centre et zoome sur une annotation (animé), puis ouvre sa fenêtre
+  const focusAnnotation = (annotation: Annotation, openDialog = true) => {
+    const container = containerRef.current
+    if (!container || !imageSize.w) return
+    const cw = container.clientWidth
+    const ch = container.clientHeight
+    const targetScale = Math.min(3, Math.max(scale, 1.8))
+    const px = (annotation.x / 100) * imageSize.w
+    const py = (annotation.y / 100) * imageSize.h
+
+    setFocusedId(annotation.id)
+    setAnimating(true)
+    setScale(targetScale)
+    setOffset({ x: cw / 2 - px * targetScale, y: ch / 2 - py * targetScale })
+    setShowList(false)
+
+    window.setTimeout(() => setAnimating(false), 450)
+    if (openDialog) {
+      window.setTimeout(() => setSelectedAnnotation(annotation), 380)
+    }
+  }
+
   const cursor = mode === 'pan'
     ? (pointers.current.size > 0 ? 'grabbing' : 'grab')
     : 'crosshair'
@@ -161,19 +201,29 @@ export default function PlanViewer({ floor, user }: Props) {
       <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-white rounded-full shadow-lg px-1.5 py-1">
         <button
           onClick={() => setMode('pan')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
             mode === 'pan' ? 'bg-orange-500 text-white' : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          <Hand size={13} /> Naviguer
+          <Hand size={14} /> <span className="hidden sm:inline">Naviguer</span>
         </button>
         <button
           onClick={() => setMode('annotate')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
             mode === 'annotate' ? 'bg-orange-500 text-white' : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          <MapPin size={13} /> Annoter
+          <MapPin size={14} /> <span className="hidden sm:inline">Annoter</span>
+        </button>
+        <div className="w-px h-5 bg-gray-200 mx-0.5" />
+        <button
+          onClick={() => setShowList(v => !v)}
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+            showList ? 'bg-gray-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <List size={14} /> <span className="hidden sm:inline">Liste</span>
+          <span className="bg-gray-200 text-gray-700 rounded-full px-1.5 text-[10px] leading-4">{annotations.length}</span>
         </button>
       </div>
 
@@ -194,6 +244,7 @@ export default function PlanViewer({ floor, user }: Props) {
             transformOrigin: '0 0',
             position: 'absolute',
             userSelect: 'none',
+            transition: animating ? 'transform 0.4s cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
           }}
         >
           {floor.plan_type === 'image' || !floor.plan_type ? (
@@ -220,6 +271,7 @@ export default function PlanViewer({ floor, user }: Props) {
               annotation={annotation}
               imageWidth={imageSize.w}
               imageHeight={imageSize.h}
+              isFocused={focusedId === annotation.id}
               onClick={(e) => handleAnnotationClick(annotation, e)}
             />
           ))}
@@ -261,9 +313,66 @@ export default function PlanViewer({ floor, user }: Props) {
         )}
       </div>
 
-      <div className="absolute top-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded z-20">
-        {annotations.length} annotation{annotations.length > 1 ? 's' : ''}
-      </div>
+      {/* Panneau liste des annotations (drawer responsive) */}
+      {showList && (
+        <>
+          {/* Voile (mobile/tablette) */}
+          <div className="absolute inset-0 bg-black/20 z-20 sm:bg-transparent sm:pointer-events-none" onClick={() => setShowList(false)} />
+          <div className="absolute top-0 right-0 h-full w-full sm:w-80 max-w-[85%] bg-white shadow-2xl z-30 flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+              <h3 className="font-semibold text-gray-800 text-sm">
+                Annotations ({annotations.length})
+              </h3>
+              <button onClick={() => setShowList(false)} className="text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {annotations.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-10 px-4">
+                  Aucune annotation. Passez en mode &laquo; Annoter &raquo; et cliquez sur le plan.
+                </p>
+              ) : (
+                <ul className="divide-y divide-gray-50">
+                  {annotations.map((a, i) => {
+                    const t = TYPE_META[a.type] || TYPE_META.note
+                    const s = STATUS_META[a.status] || STATUS_META.ouvert
+                    const Icon = t.icon
+                    const photoCount = a.photos?.length || 0
+                    const commentCount = a.comments?.length || 0
+                    return (
+                      <li key={a.id}>
+                        <button
+                          onClick={() => focusAnnotation(a)}
+                          className="w-full text-left px-4 py-3 hover:bg-orange-50 transition-colors flex gap-3 items-start"
+                        >
+                          <div className={`${t.bg} ${t.color} w-7 h-7 rounded-full flex items-center justify-center shrink-0`}>
+                            <Icon size={13} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] text-gray-400 font-mono shrink-0">#{i + 1}</span>
+                              <span className="font-medium text-gray-800 text-sm truncate">{a.title}</span>
+                            </div>
+                            {a.description && (
+                              <p className="text-xs text-gray-500 truncate mt-0.5">{a.description}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.color}`}>{s.label}</span>
+                              {photoCount > 0 && <span className="text-[10px] text-gray-400">📷 {photoCount}</span>}
+                              {commentCount > 0 && <span className="text-[10px] text-gray-400">💬 {commentCount}</span>}
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Création d'annotation */}
       {pendingClick && (
@@ -283,7 +392,7 @@ export default function PlanViewer({ floor, user }: Props) {
           mode="view"
           annotation={selectedAnnotation}
           userId={user.id}
-          onClose={() => setSelectedAnnotation(null)}
+          onClose={() => { setSelectedAnnotation(null); setFocusedId(null) }}
           onUpdated={(a) => {
             setAnnotations(prev => prev.map(x => x.id === a.id ? a : x))
             setSelectedAnnotation(a)

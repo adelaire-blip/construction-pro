@@ -19,10 +19,11 @@ interface Props {
   annotation: Annotation
   imageWidth: number
   imageHeight: number
+  isFocused?: boolean
   onClick: (e: React.MouseEvent) => void
 }
 
-export default function AnnotationMarker({ annotation, imageWidth, imageHeight, onClick }: Props) {
+export default function AnnotationMarker({ annotation, imageWidth, imageHeight, isFocused, onClick }: Props) {
   const config = TYPE_CONFIG[annotation.type] || TYPE_CONFIG.note
   const Icon = config.icon
   const x = (annotation.x / 100) * imageWidth
@@ -30,14 +31,17 @@ export default function AnnotationMarker({ annotation, imageWidth, imageHeight, 
 
   return (
     <div
-      style={{ position: 'absolute', left: `${x}px`, top: `${y}px`, transform: 'translate(-50%, -100%)' }}
+      style={{ position: 'absolute', left: `${x}px`, top: `${y}px`, transform: 'translate(-50%, -100%)', zIndex: isFocused ? 30 : undefined }}
       onClick={onClick}
       className="cursor-pointer group"
       title={annotation.title}
     >
       {/* Pin */}
       <div className={`relative flex flex-col items-center`}>
-        <div className={`${config.color} text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg border-2 ${config.borderColor} group-hover:scale-110 transition-transform`}>
+        {isFocused && (
+          <span className="absolute top-0 w-8 h-8 rounded-full bg-orange-400/60 animate-ping" />
+        )}
+        <div className={`${config.color} text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg border-2 ${isFocused ? 'border-orange-300 ring-2 ring-orange-300 scale-110' : config.borderColor} group-hover:scale-110 transition-transform`}>
           <Icon size={14} />
         </div>
         {/* Status dot */}
