@@ -20,7 +20,7 @@ import { toast } from 'sonner'
 import {
   Building2, Plus, MapPin, Users, Layers, LogOut,
   HardHat, Clock, CheckCircle, PauseCircle, Loader2,
-  MoreVertical, Archive, ArchiveRestore, Trash2, AlertTriangle
+  MoreVertical, Archive, ArchiveRestore, Trash2, AlertTriangle, Settings
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -140,7 +140,10 @@ export default function DashboardClient({ user, profile, projects: initialProjec
               <p className="text-sm font-medium text-gray-900">{profile?.full_name || user.email}</p>
               <p className="text-xs text-gray-500">{user.email}</p>
             </div>
-            <Button variant="ghost" size="icon" onClick={handleLogout}>
+            <Button variant="ghost" size="icon" onClick={() => router.push('/settings')} title="Paramètres">
+              <Settings size={18} />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handleLogout} title="Déconnexion">
               <LogOut size={18} />
             </Button>
           </div>

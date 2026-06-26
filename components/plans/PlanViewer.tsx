@@ -349,8 +349,15 @@ export default function PlanViewer({ floor, user }: Props) {
                               <span className="text-[10px] text-gray-400 font-mono shrink-0">#{i + 1}</span>
                               <span className="font-medium text-gray-800 text-sm truncate">{a.title}</span>
                             </div>
-                            {a.description && (
-                              <p className="text-xs text-gray-500 truncate mt-0.5">{a.description}</p>
+                            {a.trade && (
+                              <span className="inline-block text-[10px] font-semibold bg-gray-800 text-white rounded px-1.5 py-0.5 mt-1">
+                                {a.trade}
+                              </span>
+                            )}
+                            {(a.profile?.company || a.profile?.full_name) && (
+                              <p className="text-[11px] text-gray-500 truncate mt-1">
+                                {a.profile?.company || a.profile?.full_name}
+                              </p>
                             )}
                             <div className="flex items-center gap-2 mt-1.5">
                               <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.color}`}>{s.label}</span>

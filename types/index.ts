@@ -7,10 +7,22 @@ export type AttachmentType = 'image' | 'document'
 export interface Profile {
   id: string
   full_name: string | null
+  first_name: string | null
+  last_name: string | null
+  email: string | null
   company: string | null
+  trade: string | null
   role: UserRole
   avatar_url: string | null
   phone: string | null
+  created_at: string
+}
+
+export interface Trade {
+  id: string
+  name: string
+  color: string
+  created_by: string | null
   created_at: string
 }
 
@@ -57,6 +69,7 @@ export interface Annotation {
   description: string | null
   type: AnnotationType
   status: AnnotationStatus
+  trade: string | null
   created_by: string
   created_at: string
   updated_at: string

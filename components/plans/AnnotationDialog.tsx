@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Annotation, AnnotationPhoto } from '@/types'
+import { Annotation, AnnotationPhoto, Trade } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -60,8 +60,20 @@ export default function AnnotationDialog(props: Props) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [type, setType] = useState('reservation')
+  const [trade, setTrade] = useState('')
+  const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
+
+  // Charge les corps de métier (mode création)
+  useEffect(() => {
+    if (props.mode === 'create') {
+      supabase.from('trades').select('*').order('name').then(({ data }) => {
+        if (data) setTrades(data)
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // View mode state
   const [comment, setComment] = useState('')
@@ -99,6 +111,7 @@ export default function AnnotationDialog(props: Props) {
         title,
         description,
         type,
+        trade: trade || null,
         status: 'ouvert',
         created_by: props.userId,
       })
@@ -326,6 +339,17 @@ export default function AnnotationDialog(props: Props) {
               </Select>
             </div>
             <div>
+              <Label>Corps de métier concerné</Label>
+              <select
+                value={trade}
+                onChange={e => setTrade(e.target.value)}
+                className="mt-1 w-full h-9 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+              >
+                <option value="">— Aucun —</option>
+                {trades.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+              </select>
+            </div>
+            <div>
               <Label>Description</Label>
               <Textarea
                 value={description}
@@ -383,6 +407,11 @@ export default function AnnotationDialog(props: Props) {
           <div className="flex flex-col flex-1 overflow-hidden">
             {/* Meta info */}
             <div className="px-4 py-3 space-y-2 border-b border-gray-100">
+              {annotation.trade && (
+                <span className="inline-block text-xs font-semibold bg-gray-800 text-white rounded px-2 py-0.5">
+                  {annotation.trade}
+                </span>
+              )}
               {annotation.description && (
                 <p className="text-sm text-gray-600">{annotation.description}</p>
               )}
@@ -399,10 +428,11 @@ export default function AnnotationDialog(props: Props) {
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="text-xs text-gray-400">
-                  par {annotation.profile?.full_name || 'Inconnu'} •{' '}
-                  {format(new Date(annotation.created_at), 'dd MMM yyyy', { locale: fr })}
-                </span>
+              </div>
+              <div className="text-xs text-gray-500">
+                <span className="font-medium text-gray-700">{annotation.profile?.full_name || 'Inconnu'}</span>
+                {annotation.profile?.company && <span> — {annotation.profile.company}</span>}
+                <span className="text-gray-400"> • {format(new Date(annotation.created_at), 'dd MMM yyyy', { locale: fr })}</span>
               </div>
             </div>
 
