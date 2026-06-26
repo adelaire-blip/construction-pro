@@ -37,7 +37,7 @@ export default function PlanViewer({ floor, user }: Props) {
   const loadAnnotations = async () => {
     const { data } = await supabase
       .from('annotations')
-      .select('*, profile:profiles(*), comments:annotation_comments(*, profile:profiles(*))')
+      .select('*, profile:profiles(*), photos:annotation_photos(*), comments:annotation_comments(*, profile:profiles(*))')
       .eq('floor_id', floor.id)
       .order('created_at')
     setAnnotations(data || [])

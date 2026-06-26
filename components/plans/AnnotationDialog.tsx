@@ -2,19 +2,20 @@
 
 import { useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Annotation, AnnotationComment } from '@/types'
+import { Annotation, AnnotationPhoto } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { X, Send, Image, Loader2, Bookmark, MessageSquare, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
+import {
+  X, Send, Image as ImageIcon, ImagePlus, Loader2, Bookmark, MessageSquare,
+  AlertTriangle, Trash2, ChevronLeft, ChevronRight
+} from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
 
@@ -52,21 +53,38 @@ type Props = CreateProps | ViewProps
 export default function AnnotationDialog(props: Props) {
   const supabase = createClient()
   const fileRef = useRef<HTMLInputElement>(null)
+  const galleryRef = useRef<HTMLInputElement>(null)
+  const createPhotoRef = useRef<HTMLInputElement>(null)
 
   // Create mode state
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [type, setType] = useState('reservation')
   const [loading, setLoading] = useState(false)
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
 
   // View mode state
   const [comment, setComment] = useState('')
   const [commentLoading, setCommentLoading] = useState(false)
   const [photoUploading, setPhotoUploading] = useState(false)
+  const [galleryUploading, setGalleryUploading] = useState(false)
+  const [lightbox, setLightbox] = useState<number | null>(null)
   const [status, setStatus] = useState(props.mode === 'view' ? props.annotation.status : 'ouvert')
   const [localAnnotation, setLocalAnnotation] = useState<Annotation | null>(
     props.mode === 'view' ? props.annotation : null
   )
+
+  // Upload un fichier vers le bucket attachments, renvoie l'URL publique
+  const uploadFile = async (file: File, annotationId: string): Promise<string | null> => {
+    const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
+    const path = `annotations/${annotationId}/${Date.now()}_${safeName}`
+    const { error } = await supabase.storage.from('attachments').upload(path, file)
+    if (error) {
+      console.error('Upload photo error:', error)
+      return null
+    }
+    return supabase.storage.from('attachments').getPublicUrl(path).data.publicUrl
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -84,17 +102,83 @@ export default function AnnotationDialog(props: Props) {
         status: 'ouvert',
         created_by: props.userId,
       })
-      .select('*, profile:profiles(*), comments:annotation_comments(*, profile:profiles(*))')
+      .select('*, profile:profiles(*), photos:annotation_photos(*), comments:annotation_comments(*, profile:profiles(*))')
       .single()
 
     if (error) {
       console.error('Annotation create error:', error)
       toast.error(`Erreur: ${error.message} (${error.code})`)
-    } else {
-      toast.success('Annotation créée !')
-      props.onCreated(data)
+      setLoading(false)
+      return
     }
+
+    // Upload des photos sélectionnées
+    const photos: AnnotationPhoto[] = []
+    for (const file of pendingFiles) {
+      const url = await uploadFile(file, data.id)
+      if (url) {
+        const { data: photo } = await supabase
+          .from('annotation_photos')
+          .insert({ annotation_id: data.id, photo_url: url, created_by: props.userId })
+          .select()
+          .single()
+        if (photo) photos.push(photo)
+      }
+    }
+
+    toast.success('Annotation créée !')
+    props.onCreated({ ...data, photos })
     setLoading(false)
+  }
+
+  const handleCreatePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    setPendingFiles(prev => [...prev, ...files])
+    e.target.value = ''
+  }
+
+  const handleAddGalleryPhotos = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (props.mode !== 'view') return
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+    setGalleryUploading(true)
+    const newPhotos: AnnotationPhoto[] = []
+    for (const file of files) {
+      const url = await uploadFile(file, props.annotation.id)
+      if (url) {
+        const { data: photo } = await supabase
+          .from('annotation_photos')
+          .insert({ annotation_id: props.annotation.id, photo_url: url, created_by: props.userId })
+          .select()
+          .single()
+        if (photo) newPhotos.push(photo)
+      }
+    }
+    if (newPhotos.length && localAnnotation) {
+      const updated = { ...localAnnotation, photos: [...(localAnnotation.photos || []), ...newPhotos] }
+      setLocalAnnotation(updated)
+      props.onUpdated(updated)
+      toast.success(`${newPhotos.length} photo(s) ajoutée(s)`)
+    } else {
+      toast.error('Erreur lors de l\'ajout des photos')
+    }
+    setGalleryUploading(false)
+    if (galleryRef.current) galleryRef.current.value = ''
+  }
+
+  const handleDeletePhoto = async (photo: AnnotationPhoto) => {
+    if (props.mode !== 'view') return
+    const { error } = await supabase.from('annotation_photos').delete().eq('id', photo.id)
+    if (error) {
+      toast.error('Suppression impossible (photo d\'un autre utilisateur ?)')
+      return
+    }
+    if (localAnnotation) {
+      const updated = { ...localAnnotation, photos: (localAnnotation.photos || []).filter(p => p.id !== photo.id) }
+      setLocalAnnotation(updated)
+      props.onUpdated(updated)
+    }
+    setLightbox(null)
   }
 
   const handleStatusChange = async (newStatus: string) => {
@@ -104,7 +188,7 @@ export default function AnnotationDialog(props: Props) {
       .from('annotations')
       .update({ status: newStatus, updated_at: new Date().toISOString() })
       .eq('id', props.annotation.id)
-      .select('*, profile:profiles(*), comments:annotation_comments(*, profile:profiles(*))')
+      .select('*, profile:profiles(*), photos:annotation_photos(*), comments:annotation_comments(*, profile:profiles(*))')
       .single()
     if (!error && data) {
       setLocalAnnotation(data)
@@ -251,11 +335,46 @@ export default function AnnotationDialog(props: Props) {
                 className="mt-1"
               />
             </div>
+            {/* Galerie photos (création) */}
+            <div>
+              <Label>Photos</Label>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                ref={createPhotoRef}
+                onChange={handleCreatePhotoSelect}
+              />
+              <div className="mt-1 grid grid-cols-4 gap-2">
+                {pendingFiles.map((file, i) => (
+                  <div key={i} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={URL.createObjectURL(file)} alt="" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+                      className="absolute top-0.5 right-0.5 bg-black/60 text-white rounded-full p-0.5"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => createPhotoRef.current?.click()}
+                  className="aspect-square rounded-lg border-2 border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 hover:border-orange-400 hover:text-orange-500 transition-colors"
+                >
+                  <ImagePlus size={18} />
+                  <span className="text-[10px] mt-0.5">Ajouter</span>
+                </button>
+              </div>
+            </div>
             <div className="flex justify-end gap-2 pt-1">
               <Button type="button" variant="outline" onClick={props.onClose}>Annuler</Button>
               <Button type="submit" className="bg-orange-500 hover:bg-orange-600" disabled={loading}>
                 {loading ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
-                Créer
+                {loading && pendingFiles.length ? 'Upload photos...' : 'Créer'}
               </Button>
             </div>
           </form>
@@ -285,6 +404,47 @@ export default function AnnotationDialog(props: Props) {
                   {format(new Date(annotation.created_at), 'dd MMM yyyy', { locale: fr })}
                 </span>
               </div>
+            </div>
+
+            {/* Galerie photos (consultation) */}
+            <div className="px-4 py-3 border-b border-gray-100">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Photos ({(annotation.photos || []).length})
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  ref={galleryRef}
+                  onChange={handleAddGalleryPhotos}
+                />
+                <button
+                  onClick={() => galleryRef.current?.click()}
+                  disabled={galleryUploading}
+                  className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium"
+                >
+                  {galleryUploading ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+                  {galleryUploading ? 'Ajout...' : 'Ajouter'}
+                </button>
+              </div>
+              {(annotation.photos || []).length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-2">Aucune photo</p>
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  {(annotation.photos || []).map((photo, i) => (
+                    <button
+                      key={photo.id}
+                      onClick={() => setLightbox(i)}
+                      className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 group"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={photo.photo_url} alt="" className="w-full h-full object-cover group-hover:opacity-90" />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Comments */}
@@ -331,7 +491,7 @@ export default function AnnotationDialog(props: Props) {
                   disabled={photoUploading}
                   className="p-2 text-gray-400 hover:text-orange-500 transition-colors"
                 >
-                  {photoUploading ? <Loader2 size={18} className="animate-spin" /> : <Image size={18} />}
+                  {photoUploading ? <Loader2 size={18} className="animate-spin" /> : <ImageIcon size={18} />}
                 </button>
                 <Input
                   value={comment}
@@ -347,6 +507,59 @@ export default function AnnotationDialog(props: Props) {
           </div>
         ) : null}
       </div>
+
+      {/* Visionneuse plein écran (lightbox) */}
+      {lightbox !== null && annotation?.photos && annotation.photos[lightbox] && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center"
+          onClick={(e) => { e.stopPropagation(); setLightbox(null) }}
+        >
+          <button
+            onClick={(e) => { e.stopPropagation(); setLightbox(null) }}
+            className="absolute top-4 right-4 text-white/80 hover:text-white"
+          >
+            <X size={28} />
+          </button>
+
+          {lightbox > 0 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setLightbox(lightbox - 1) }}
+              className="absolute left-4 text-white/80 hover:text-white"
+            >
+              <ChevronLeft size={36} />
+            </button>
+          )}
+
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={annotation.photos[lightbox].photo_url}
+            alt=""
+            className="max-w-[90vw] max-h-[85vh] object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+
+          {lightbox < annotation.photos.length - 1 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setLightbox(lightbox + 1) }}
+              className="absolute right-4 text-white/80 hover:text-white"
+            >
+              <ChevronRight size={36} />
+            </button>
+          )}
+
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3">
+            <span className="text-white/70 text-sm">{lightbox + 1} / {annotation.photos.length}</span>
+            {annotation.photos[lightbox].created_by === props.userId && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleDeletePhoto(annotation.photos![lightbox]) }}
+                className="flex items-center gap-1 text-red-300 hover:text-red-200 text-sm"
+              >
+                <Trash2 size={14} /> Supprimer
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

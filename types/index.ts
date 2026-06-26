@@ -20,6 +20,7 @@ export interface Project {
   address: string | null
   description: string | null
   status: ProjectStatus
+  archived: boolean
   cover_url: string | null
   created_by: string
   created_at: string
@@ -61,6 +62,15 @@ export interface Annotation {
   updated_at: string
   profile?: Profile
   comments?: AnnotationComment[]
+  photos?: AnnotationPhoto[]
+}
+
+export interface AnnotationPhoto {
+  id: string
+  annotation_id: string
+  photo_url: string
+  created_by: string
+  created_at: string
 }
 
 export interface AnnotationComment {

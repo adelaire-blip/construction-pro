@@ -19,7 +19,8 @@ import {
 import { toast } from 'sonner'
 import {
   Building2, Plus, MapPin, Users, Layers, LogOut,
-  HardHat, Clock, CheckCircle, PauseCircle, Loader2
+  HardHat, Clock, CheckCircle, PauseCircle, Loader2,
+  MoreVertical, Archive, ArchiveRestore, Trash2, AlertTriangle
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -42,6 +43,43 @@ export default function DashboardClient({ user, profile, projects: initialProjec
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [form, setForm] = useState({ name: '', address: '', description: '', status: 'en_cours' })
+  const [showArchived, setShowArchived] = useState(false)
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
+
+  const handleArchive = async (project: Project, archived: boolean) => {
+    setMenuOpenId(null)
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('projects')
+      .update({ archived })
+      .eq('id', project.id)
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+    } else {
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, archived } : p))
+      toast.success(archived ? 'Projet archivé' : 'Projet désarchivé')
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setActionLoading(true)
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', deleteTarget.id)
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+    } else {
+      setProjects(prev => prev.filter(p => p.id !== deleteTarget.id))
+      toast.success('Projet supprimé définitivement')
+      setDeleteTarget(null)
+    }
+    setActionLoading(false)
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -80,6 +118,9 @@ export default function DashboardClient({ user, profile, projects: initialProjec
     router.push('/auth/login')
   }
 
+  const archivedCount = projects.filter(p => p.archived).length
+  const visibleProjects = projects.filter(p => !!p.archived === showArchived)
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -108,11 +149,22 @@ export default function DashboardClient({ user, profile, projects: initialProjec
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Actions bar */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-6 gap-2">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">Mes projets</h2>
-            <p className="text-sm text-gray-500">{projects.length} projet{projects.length > 1 ? 's' : ''}</p>
+            <h2 className="text-xl font-bold text-gray-900">
+              {showArchived ? 'Projets archivés' : 'Mes projets'}
+            </h2>
+            <p className="text-sm text-gray-500">{visibleProjects.length} projet{visibleProjects.length > 1 ? 's' : ''}</p>
           </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="gap-2 hidden sm:flex"
+              onClick={() => setShowArchived(v => !v)}
+            >
+              {showArchived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+              {showArchived ? 'Projets actifs' : `Archivés${archivedCount ? ` (${archivedCount})` : ''}`}
+            </Button>
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger render={<Button className="bg-orange-500 hover:bg-orange-600 gap-2" />}>
               <Plus size={16} /> Nouveau projet
@@ -174,34 +226,80 @@ export default function DashboardClient({ user, profile, projects: initialProjec
               </form>
             </DialogContent>
           </Dialog>
+          </div>
+        </div>
+
+        {/* Toggle archivés (mobile) */}
+        <div className="sm:hidden mb-4">
+          <Button variant="outline" className="gap-2 w-full" onClick={() => setShowArchived(v => !v)}>
+            {showArchived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+            {showArchived ? 'Voir projets actifs' : `Voir archivés${archivedCount ? ` (${archivedCount})` : ''}`}
+          </Button>
         </div>
 
         {/* Projects grid */}
-        {projects.length === 0 ? (
+        {visibleProjects.length === 0 ? (
           <div className="text-center py-16">
             <HardHat size={48} className="text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-600">Aucun projet</h3>
-            <p className="text-gray-400 text-sm mt-1">Créez votre premier projet de construction</p>
+            <h3 className="text-lg font-medium text-gray-600">
+              {showArchived ? 'Aucun projet archivé' : 'Aucun projet'}
+            </h3>
+            {!showArchived && (
+              <p className="text-gray-400 text-sm mt-1">Créez votre premier projet de construction</p>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {projects.map(project => {
+            {visibleProjects.map(project => {
               const status = STATUS_CONFIG[project.status] || STATUS_CONFIG.en_cours
               const StatusIcon = status.icon
+              const isOwner = project.created_by === user.id
               return (
-                <button
+                <div
                   key={project.id}
                   onClick={() => router.push(`/projects/${project.id}`)}
-                  className="bg-white rounded-xl border border-gray-200 p-5 text-left hover:shadow-md hover:border-orange-200 transition-all group"
+                  className="relative bg-white rounded-xl border border-gray-200 p-5 text-left hover:shadow-md hover:border-orange-200 transition-all group cursor-pointer"
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div className="bg-orange-50 text-orange-600 p-2 rounded-lg group-hover:bg-orange-100 transition-colors">
                       <Building2 size={20} />
                     </div>
-                    <span className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${status.color}`}>
-                      <StatusIcon size={11} />
-                      {status.label}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${status.color}`}>
+                        <StatusIcon size={11} />
+                        {status.label}
+                      </span>
+                      {isOwner && (
+                        <div className="relative">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === project.id ? null : project.id) }}
+                            className="p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+                          {menuOpenId === project.id && (
+                            <>
+                              <div className="fixed inset-0 z-10" onClick={(e) => { e.stopPropagation(); setMenuOpenId(null) }} />
+                              <div className="absolute right-0 top-7 z-20 w-44 bg-white rounded-lg shadow-lg border border-gray-100 py-1">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleArchive(project, !project.archived) }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                                >
+                                  {project.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                                  {project.archived ? 'Désarchiver' : 'Archiver'}
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setMenuOpenId(null); setDeleteTarget(project) }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                                >
+                                  <Trash2 size={14} /> Supprimer
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <h3 className="font-semibold text-gray-900 mb-1 truncate">{project.name}</h3>
                   {project.address && (
@@ -217,12 +315,38 @@ export default function DashboardClient({ user, profile, projects: initialProjec
                     <span className="flex items-center gap-1"><Layers size={11} /> {(project as any).floors?.[0]?.count ?? 0} niveau(x)</span>
                     <span className="ml-auto">{format(new Date(project.created_at), 'dd MMM yyyy', { locale: fr })}</span>
                   </div>
-                </button>
+                </div>
               )
             })}
           </div>
         )}
       </main>
+
+      {/* Confirmation de suppression */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDeleteTarget(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="bg-red-100 text-red-600 p-2 rounded-lg">
+                <AlertTriangle size={20} />
+              </div>
+              <h3 className="font-bold text-gray-900">Supprimer ce projet ?</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">
+              Le projet <strong>{deleteTarget.name}</strong> sera supprimé <strong>définitivement</strong>,
+              avec tous ses niveaux, plans, annotations et messages.
+            </p>
+            <p className="text-sm text-gray-400 mb-5">Cette action est irréversible.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={actionLoading}>Annuler</Button>
+              <Button className="bg-red-600 hover:bg-red-700" onClick={handleDelete} disabled={actionLoading}>
+                {actionLoading ? <Loader2 size={14} className="animate-spin mr-1" /> : <Trash2 size={14} className="mr-1" />}
+                Supprimer définitivement
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
