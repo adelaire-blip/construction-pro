@@ -44,9 +44,13 @@ export default function ChatPanel({ user, profile, project }: Props) {
   const [uploading, setUploading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const lastTs = useRef<string | null>(null)
 
   // Fusionne de nouveaux messages en évitant les doublons (par id)
   const mergeMessages = (incoming: Message[]) => {
+    incoming.forEach(m => {
+      if (!lastTs.current || m.created_at > lastTs.current) lastTs.current = m.created_at
+    })
     setMessages(prev => {
       const map = new Map(prev.map(m => [m.id, m]))
       incoming.forEach(m => map.set(m.id, m))
@@ -76,8 +80,11 @@ export default function ChatPanel({ user, profile, project }: Props) {
       )
       .subscribe()
 
-    // Filet de sécurité : rafraîchissement automatique toutes les 4s
-    const interval = setInterval(loadMessages, 4000)
+    // Filet de sécurité : ne récupère QUE les nouveaux messages (incrémental),
+    // et seulement quand l'onglet est visible (économise réseau + CPU).
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadNewMessages()
+    }, 6000)
 
     return () => {
       supabase.removeChannel(channel)
@@ -89,13 +96,32 @@ export default function ChatPanel({ user, profile, project }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Chargement initial complet
   const loadMessages = async () => {
     const { data } = await supabase
       .from('messages')
       .select('*, profile:profiles(*)')
       .eq('project_id', project.id)
       .order('created_at')
-    if (data) mergeMessages(data)
+    if (data) {
+      mergeMessages(data)
+      if (data.length) lastTs.current = data[data.length - 1].created_at
+    }
+  }
+
+  // Chargement incrémental : uniquement les messages plus récents que le dernier connu
+  const loadNewMessages = async () => {
+    let q = supabase
+      .from('messages')
+      .select('*, profile:profiles(*)')
+      .eq('project_id', project.id)
+      .order('created_at')
+    if (lastTs.current) q = q.gt('created_at', lastTs.current)
+    const { data } = await q
+    if (data && data.length) {
+      mergeMessages(data)
+      lastTs.current = data[data.length - 1].created_at
+    }
   }
 
   const handleSend = async (e: React.FormEvent) => {
@@ -210,6 +236,8 @@ export default function ChatPanel({ user, profile, project }: Props) {
                         <img
                           src={message.attachment_url}
                           alt="Photo"
+                          loading="lazy"
+                          decoding="async"
                           className="rounded-lg max-w-full max-h-48 object-cover cursor-pointer"
                           onClick={() => window.open(message.attachment_url!, '_blank')}
                         />

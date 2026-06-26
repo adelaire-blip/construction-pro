@@ -440,7 +440,7 @@ export default function AnnotationDialog(props: Props) {
                       className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 group"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={photo.photo_url} alt="" className="w-full h-full object-cover group-hover:opacity-90" />
+                      <img src={photo.photo_url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:opacity-90" />
                     </button>
                   ))}
                 </div>
