@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { UserPlus, Trash2, Loader2, Users, Crown, HardHat } from 'lucide-react'
+import { UserPlus, Trash2, Loader2, Users, Crown, HardHat, Phone, Mail } from 'lucide-react'
 
 interface Props {
   user: User
@@ -161,8 +161,33 @@ export default function MembersPanel({ user, project, members, setMembers, isOwn
                   {member.profile?.full_name || 'Utilisateur'}
                   {isMe && <span className="text-gray-400 font-normal ml-1">(vous)</span>}
                 </p>
-                <p className="text-xs text-gray-500 truncate">{member.profile?.company || ''}</p>
+                <p className="text-xs text-gray-500 truncate">
+                  {[member.profile?.company, member.profile?.trade].filter(Boolean).join(' • ')}
+                </p>
               </div>
+
+              {/* Contact rapide */}
+              <div className="flex items-center gap-1 shrink-0">
+                {member.profile?.phone && (
+                  <a
+                    href={`tel:${member.profile.phone.replace(/\s/g, '')}`}
+                    title={`Appeler ${member.profile.phone}`}
+                    className="w-8 h-8 flex items-center justify-center rounded-full bg-green-50 text-green-600 hover:bg-green-100 transition-colors"
+                  >
+                    <Phone size={14} />
+                  </a>
+                )}
+                {member.profile?.email && (
+                  <a
+                    href={`mailto:${member.profile.email}`}
+                    title={`Écrire à ${member.profile.email}`}
+                    className="w-8 h-8 flex items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+                  >
+                    <Mail size={14} />
+                  </a>
+                )}
+              </div>
+
               <div className="flex items-center gap-2 shrink-0">
                 {isProjectOwner ? (
                   <Badge className="bg-orange-100 text-orange-700 text-xs gap-1">
