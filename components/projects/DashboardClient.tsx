@@ -258,6 +258,8 @@ export default function DashboardClient({ user, profile, projects: initialProjec
                 <div
                   key={project.id}
                   onClick={() => router.push(`/projects/${project.id}`)}
+                  onMouseEnter={() => router.prefetch(`/projects/${project.id}`)}
+                  onTouchStart={() => router.prefetch(`/projects/${project.id}`)}
                   className="relative bg-white rounded-xl border border-gray-200 p-5 text-left hover:shadow-md hover:border-orange-200 transition-all group cursor-pointer"
                 >
                   <div className="flex items-start justify-between mb-3">

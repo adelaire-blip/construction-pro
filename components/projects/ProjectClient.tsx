@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Project, Floor, ProjectMember, Profile } from '@/types'
@@ -39,6 +39,11 @@ export default function ProjectClient({ user, profile, project, initialFloors, i
   const [floors, setFloors] = useState(initialFloors)
   const [members, setMembers] = useState(initialMembers)
   const isOwner = project.created_by === user.id
+
+  // Précharge le dashboard pour un retour instantané
+  useEffect(() => {
+    router.prefetch('/dashboard')
+  }, [router])
 
   return (
     <div className="h-screen flex flex-col bg-gray-50">
