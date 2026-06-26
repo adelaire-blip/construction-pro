@@ -13,6 +13,7 @@ const STATUS_DOT = {
   ouvert: 'bg-gray-300',
   en_cours: 'bg-yellow-400',
   resolu: 'bg-green-400',
+  cloture: 'bg-blue-400',
 }
 
 interface Props {

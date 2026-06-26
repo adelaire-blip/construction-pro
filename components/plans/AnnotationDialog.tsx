@@ -14,7 +14,8 @@ import {
 import { toast } from 'sonner'
 import {
   X, Send, Image as ImageIcon, ImagePlus, Loader2, Bookmark, MessageSquare,
-  AlertTriangle, Trash2, ChevronLeft, ChevronRight
+  AlertTriangle, Trash2, ChevronLeft, ChevronRight, Pencil, Check,
+  RotateCcw, ShieldCheck, Lock
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -26,9 +27,10 @@ const TYPE_OPTIONS = [
 ]
 
 const STATUS_OPTIONS = [
-  { value: 'ouvert', label: 'Ouvert', color: 'bg-gray-100 text-gray-700' },
+  { value: 'ouvert', label: 'Ouverte', color: 'bg-gray-100 text-gray-700' },
   { value: 'en_cours', label: 'En cours', color: 'bg-yellow-100 text-yellow-700' },
-  { value: 'resolu', label: 'Résolu', color: 'bg-green-100 text-green-700' },
+  { value: 'resolu', label: 'Réserve levée', color: 'bg-green-100 text-green-700' },
+  { value: 'cloture', label: 'Clôturée', color: 'bg-blue-100 text-blue-700' },
 ]
 
 interface CreateProps {
@@ -45,8 +47,10 @@ interface ViewProps {
   mode: 'view'
   annotation: Annotation
   userId: string
+  isAdmin: boolean
   onClose: () => void
   onUpdated: (annotation: Annotation) => void
+  onDeleted: (id: string) => void
 }
 
 type Props = CreateProps | ViewProps
@@ -86,6 +90,73 @@ export default function AnnotationDialog(props: Props) {
   const [localAnnotation, setLocalAnnotation] = useState<Annotation | null>(
     props.mode === 'view' ? props.annotation : null
   )
+
+  // Édition / suppression (mode view)
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState({
+    title: props.mode === 'view' ? props.annotation.title : '',
+    description: props.mode === 'view' ? (props.annotation.description || '') : '',
+    type: props.mode === 'view' ? props.annotation.type : 'reservation',
+    trade: props.mode === 'view' ? (props.annotation.trade || '') : '',
+  })
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  // Droits : admin du projet OU auteur de l'annotation
+  const canManage = props.mode === 'view' && (props.isAdmin || props.annotation.created_by === props.userId)
+
+  // Charge les métiers aussi en mode view (pour l'édition)
+  useEffect(() => {
+    if (props.mode === 'view') {
+      supabase.from('trades').select('*').order('name').then(({ data }) => {
+        if (data) setTrades(data)
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleSaveEdit = async () => {
+    if (props.mode !== 'view') return
+    setSavingEdit(true)
+    const { data, error } = await supabase
+      .from('annotations')
+      .update({
+        title: editForm.title,
+        description: editForm.description || null,
+        type: editForm.type,
+        trade: editForm.trade || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', props.annotation.id)
+      .select('*, profile:profiles(*), photos:annotation_photos(*), comments:annotation_comments(*, profile:profiles(*))')
+      .single()
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+    } else {
+      setLocalAnnotation(data)
+      props.onUpdated(data)
+      setEditing(false)
+      toast.success('Annotation modifiée')
+    }
+    setSavingEdit(false)
+  }
+
+  const handleDelete = async () => {
+    if (props.mode !== 'view') return
+    setDeleting(true)
+    const { error } = await supabase.from('annotations').delete().eq('id', props.annotation.id)
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+      setDeleting(false)
+    } else {
+      toast.success('Annotation supprimée')
+      props.onDeleted(props.annotation.id)
+    }
+  }
+
+  // Action rapide de statut (lever réserve / clôturer / rouvrir)
+  const quickStatus = (s: string) => handleStatusChange(s)
 
   // Upload un fichier vers le bucket attachments, renvoie l'URL publique
   const uploadFile = async (file: File, annotationId: string): Promise<string | null> => {
@@ -330,13 +401,33 @@ export default function AnnotationDialog(props: Props) {
                 <typeConfig.icon size={16} />
               </span>
             )}
-            <h3 className="font-semibold text-gray-900">
-              {props.mode === 'create' ? 'Nouvelle annotation' : annotation?.title}
+            <h3 className="font-semibold text-gray-900 truncate max-w-[200px]">
+              {props.mode === 'create' ? 'Nouvelle annotation' : (editing ? 'Modifier' : annotation?.title)}
             </h3>
           </div>
-          <button onClick={props.onClose} className="text-gray-400 hover:text-gray-600">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            {canManage && !editing && (
+              <>
+                <button
+                  onClick={() => setEditing(true)}
+                  className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md"
+                  title="Modifier"
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md"
+                  title="Supprimer"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+            <button onClick={props.onClose} className="p-1.5 text-gray-400 hover:text-gray-600">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {props.mode === 'create' ? (
@@ -438,36 +529,90 @@ export default function AnnotationDialog(props: Props) {
         ) : annotation ? (
           /* VIEW MODE */
           <div className="flex flex-col flex-1 overflow-hidden">
-            {/* Meta info */}
-            <div className="px-4 py-3 space-y-2 border-b border-gray-100">
-              {annotation.trade && (
-                <span className="inline-block text-xs font-semibold bg-gray-800 text-white rounded px-2 py-0.5">
-                  {annotation.trade}
-                </span>
-              )}
-              {annotation.description && (
-                <p className="text-sm text-gray-600">{annotation.description}</p>
-              )}
-              <div className="flex items-center gap-2 flex-wrap">
-                <Select value={status} onValueChange={(v) => v && handleStatusChange(v)}>
-                  <SelectTrigger className="h-7 w-auto text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTIONS.map(opt => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        <span className={`px-1.5 py-0.5 rounded text-xs ${opt.color}`}>{opt.label}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            {/* Meta info OU édition */}
+            {editing ? (
+              <div className="px-4 py-3 space-y-3 border-b border-gray-100 bg-orange-50/40">
+                <div>
+                  <Label className="text-xs">Titre *</Label>
+                  <Input value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} className="mt-1" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Type</Label>
+                    <select value={editForm.type} onChange={e => setEditForm({ ...editForm, type: e.target.value as Annotation['type'] })} className="mt-1 w-full h-9 rounded-lg border border-input bg-white px-2 text-sm">
+                      {TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Corps de métier</Label>
+                    <select value={editForm.trade} onChange={e => setEditForm({ ...editForm, trade: e.target.value })} className="mt-1 w-full h-9 rounded-lg border border-input bg-white px-2 text-sm">
+                      <option value="">— Aucun —</option>
+                      {trades.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs">Description</Label>
+                  <Textarea value={editForm.description} onChange={e => setEditForm({ ...editForm, description: e.target.value })} rows={2} className="mt-1" />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setEditing(false)}>Annuler</Button>
+                  <Button type="button" size="sm" className="bg-orange-500 hover:bg-orange-600" onClick={handleSaveEdit} disabled={savingEdit}>
+                    {savingEdit ? <Loader2 size={13} className="animate-spin mr-1" /> : <Check size={13} className="mr-1" />}
+                    Enregistrer
+                  </Button>
+                </div>
               </div>
-              <div className="text-xs text-gray-500">
-                <span className="font-medium text-gray-700">{annotation.profile?.full_name || 'Inconnu'}</span>
-                {annotation.profile?.company && <span> — {annotation.profile.company}</span>}
-                <span className="text-gray-400"> • {format(new Date(annotation.created_at), 'dd MMM yyyy', { locale: fr })}</span>
+            ) : (
+              <div className="px-4 py-3 space-y-2 border-b border-gray-100">
+                {annotation.trade && (
+                  <span className="inline-block text-xs font-semibold bg-gray-800 text-white rounded px-2 py-0.5">
+                    {annotation.trade}
+                  </span>
+                )}
+                {annotation.description && (
+                  <p className="text-sm text-gray-600">{annotation.description}</p>
+                )}
+
+                {/* Statut courant */}
+                <div className="flex items-center gap-2">
+                  {(() => {
+                    const so = STATUS_OPTIONS.find(o => o.value === status) || STATUS_OPTIONS[0]
+                    return <span className={`text-xs px-2 py-1 rounded-full font-medium ${so.color}`}>{so.label}</span>
+                  })()}
+                </div>
+
+                {/* Actions rapides de réserve */}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {status !== 'resolu' && status !== 'cloture' && (
+                    <button onClick={() => quickStatus('resolu')} className="flex items-center gap-1 text-xs font-medium bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg">
+                      <ShieldCheck size={13} /> Lever la réserve
+                    </button>
+                  )}
+                  {status === 'resolu' && (
+                    <button onClick={() => quickStatus('cloture')} className="flex items-center gap-1 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg">
+                      <Lock size={13} /> Clôturer
+                    </button>
+                  )}
+                  {(status === 'resolu' || status === 'cloture') && (
+                    <button onClick={() => quickStatus('ouvert')} className="flex items-center gap-1 text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 px-3 py-1.5 rounded-lg">
+                      <RotateCcw size={13} /> Rouvrir
+                    </button>
+                  )}
+                  {status === 'ouvert' && (
+                    <button onClick={() => quickStatus('en_cours')} className="flex items-center gap-1 text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 px-3 py-1.5 rounded-lg">
+                      Démarrer le traitement
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-xs text-gray-500 pt-1">
+                  <span className="font-medium text-gray-700">{annotation.profile?.full_name || 'Inconnu'}</span>
+                  {annotation.profile?.company && <span> — {annotation.profile.company}</span>}
+                  <span className="text-gray-400"> • {format(new Date(annotation.created_at), 'dd MMM yyyy', { locale: fr })}</span>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Galerie photos (consultation) */}
             <div className="px-4 py-3 border-b border-gray-100">
@@ -570,6 +715,26 @@ export default function AnnotationDialog(props: Props) {
           </div>
         ) : null}
       </div>
+
+      {/* Confirmation de suppression */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="bg-red-100 text-red-600 p-2 rounded-lg"><Trash2 size={18} /></div>
+              <h3 className="font-bold text-gray-900">Supprimer l&apos;annotation ?</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Cette annotation, ses photos et commentaires seront supprimés définitivement.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmDelete(false)} disabled={deleting}>Annuler</Button>
+              <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={handleDelete} disabled={deleting}>
+                {deleting ? <Loader2 size={13} className="animate-spin mr-1" /> : <Trash2 size={13} className="mr-1" />}
+                Supprimer
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Visionneuse plein écran (lightbox) */}
       {lightbox !== null && annotation?.photos && annotation.photos[lightbox] && (

@@ -14,6 +14,7 @@ import AnnotationDialog from './AnnotationDialog'
 interface Props {
   floor: Floor
   user: User
+  isAdmin: boolean
 }
 
 type Mode = 'pan' | 'annotate'
@@ -25,12 +26,13 @@ const TYPE_META: Record<string, { icon: typeof Bookmark; color: string; bg: stri
 }
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
-  ouvert: { color: 'bg-gray-100 text-gray-600', label: 'Ouvert' },
+  ouvert: { color: 'bg-gray-100 text-gray-600', label: 'Ouverte' },
   en_cours: { color: 'bg-yellow-100 text-yellow-700', label: 'En cours' },
-  resolu: { color: 'bg-green-100 text-green-700', label: 'Résolu' },
+  resolu: { color: 'bg-green-100 text-green-700', label: 'Réserve levée' },
+  cloture: { color: 'bg-blue-100 text-blue-700', label: 'Clôturée' },
 }
 
-export default function PlanViewer({ floor, user }: Props) {
+export default function PlanViewer({ floor, user, isAdmin }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [scale, setScale] = useState(1)
@@ -397,10 +399,16 @@ export default function PlanViewer({ floor, user }: Props) {
           mode="view"
           annotation={selectedAnnotation}
           userId={user.id}
+          isAdmin={isAdmin}
           onClose={() => { setSelectedAnnotation(null); setFocusedId(null) }}
           onUpdated={(a) => {
             setAnnotations(prev => prev.map(x => x.id === a.id ? a : x))
             setSelectedAnnotation(a)
+          }}
+          onDeleted={(id) => {
+            setAnnotations(prev => prev.filter(x => x.id !== id))
+            setSelectedAnnotation(null)
+            setFocusedId(null)
           }}
         />
       )}

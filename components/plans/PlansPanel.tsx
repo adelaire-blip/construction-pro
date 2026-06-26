@@ -11,7 +11,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { Plus, Upload, Layers, ChevronLeft, ChevronRight, Loader2, FileText, Image } from 'lucide-react'
+import { Plus, Upload, Layers, ChevronLeft, ChevronRight, Loader2, FileText, Image, Pencil, Trash2, AlertTriangle } from 'lucide-react'
 import PlanViewer from './PlanViewer'
 
 interface Props {
@@ -38,7 +38,48 @@ export default function PlansPanel({ user, project, floors, setFloors, isOwner }
   const [floorName, setFloorName] = useState('')
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [renameFloor, setRenameFloor] = useState<Floor | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [deleteFloor, setDeleteFloor] = useState<Floor | null>(null)
+  const [floorActionLoading, setFloorActionLoading] = useState(false)
   const supabase = createClient()
+
+  const handleRenameFloor = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!renameFloor) return
+    setFloorActionLoading(true)
+    const { data, error } = await supabase
+      .from('floors')
+      .update({ name: renameValue })
+      .eq('id', renameFloor.id)
+      .select()
+      .single()
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+    } else {
+      setFloors(floors.map(f => f.id === data.id ? data : f))
+      if (selectedFloor?.id === data.id) setSelectedFloor(data)
+      setRenameFloor(null)
+      toast.success('Niveau renommé')
+    }
+    setFloorActionLoading(false)
+  }
+
+  const handleDeleteFloor = async () => {
+    if (!deleteFloor) return
+    setFloorActionLoading(true)
+    const { error } = await supabase.from('floors').delete().eq('id', deleteFloor.id)
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+    } else {
+      const remaining = floors.filter(f => f.id !== deleteFloor.id)
+      setFloors(remaining)
+      if (selectedFloor?.id === deleteFloor.id) setSelectedFloor(remaining[0] || null)
+      toast.success('Niveau supprimé')
+      setDeleteFloor(null)
+    }
+    setFloorActionLoading(false)
+  }
 
   const handleAddFloor = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -146,6 +187,24 @@ export default function PlansPanel({ user, project, floors, setFloors, isOwner }
             </button>
           ))}
         </div>
+        {isOwner && selectedFloor && (
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              onClick={() => { setRenameFloor(selectedFloor); setRenameValue(selectedFloor.name) }}
+              className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-md"
+              title="Renommer le niveau"
+            >
+              <Pencil size={13} />
+            </button>
+            <button
+              onClick={() => setDeleteFloor(selectedFloor)}
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md"
+              title="Supprimer le niveau"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
         {isOwner && (
           <Dialog open={addFloorOpen} onOpenChange={setAddFloorOpen}>
             <DialogTrigger render={<Button variant="outline" size="sm" className="gap-1 shrink-0 h-7 text-xs" />}>
@@ -239,9 +298,50 @@ export default function PlansPanel({ user, project, floors, setFloors, isOwner }
               </label>
             </div>
           )}
-          <PlanViewer floor={selectedFloor} user={user} />
+          <PlanViewer floor={selectedFloor} user={user} isAdmin={isOwner} />
         </div>
       ) : null}
+
+      {/* Renommer un niveau */}
+      {renameFloor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setRenameFloor(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-gray-900 mb-3">Renommer le niveau</h3>
+            <form onSubmit={handleRenameFloor}>
+              <Input value={renameValue} onChange={e => setRenameValue(e.target.value)} autoFocus required />
+              <div className="flex justify-end gap-2 mt-4">
+                <Button type="button" variant="outline" size="sm" onClick={() => setRenameFloor(null)}>Annuler</Button>
+                <Button type="submit" size="sm" className="bg-orange-500 hover:bg-orange-600" disabled={floorActionLoading}>
+                  {floorActionLoading ? <Loader2 size={13} className="animate-spin mr-1" /> : null}
+                  Enregistrer
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Supprimer un niveau */}
+      {deleteFloor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDeleteFloor(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="bg-red-100 text-red-600 p-2 rounded-lg"><AlertTriangle size={18} /></div>
+              <h3 className="font-bold text-gray-900">Supprimer ce niveau ?</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              <strong>{deleteFloor.name}</strong> sera supprimé avec son plan et <strong>toutes ses annotations</strong>. Action irréversible.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteFloor(null)} disabled={floorActionLoading}>Annuler</Button>
+              <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={handleDeleteFloor} disabled={floorActionLoading}>
+                {floorActionLoading ? <Loader2 size={13} className="animate-spin mr-1" /> : <Trash2 size={13} className="mr-1" />}
+                Supprimer
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

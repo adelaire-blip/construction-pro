@@ -1,6 +1,6 @@
 export type ProjectStatus = 'en_cours' | 'termine' | 'en_pause'
 export type AnnotationType = 'reservation' | 'note' | 'alerte'
-export type AnnotationStatus = 'ouvert' | 'en_cours' | 'resolu'
+export type AnnotationStatus = 'ouvert' | 'en_cours' | 'resolu' | 'cloture'
 export type UserRole = 'admin' | 'professional'
 export type AttachmentType = 'image' | 'document'
 
