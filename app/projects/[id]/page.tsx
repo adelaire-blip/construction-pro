@@ -8,30 +8,20 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/auth/login')
 
-  const { data: project } = await supabase
-    .from('projects')
-    .select('*')
-    .eq('id', id)
-    .single()
+  // Toutes les requêtes en parallèle (au lieu de l'une après l'autre)
+  const [projectRes, floorsRes, membersRes, profileRes] = await Promise.all([
+    supabase.from('projects').select('*').eq('id', id).single(),
+    supabase.from('floors').select('*').eq('project_id', id).order('level'),
+    supabase.from('project_members').select('*, profile:profiles(*)').eq('project_id', id),
+    supabase.from('profiles').select('*').eq('id', user.id).single(),
+  ])
 
+  const project = projectRes.data
   if (!project) notFound()
 
-  const { data: floors } = await supabase
-    .from('floors')
-    .select('*')
-    .eq('project_id', id)
-    .order('level')
-
-  const { data: members } = await supabase
-    .from('project_members')
-    .select('*, profile:profiles(*)')
-    .eq('project_id', id)
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single()
+  const floors = floorsRes.data
+  const members = membersRes.data
+  const profile = profileRes.data
 
   return (
     <ProjectClient
