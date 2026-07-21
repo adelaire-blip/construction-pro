@@ -41,6 +41,15 @@ export interface Lot {
   created_at: string
   updated_at: string
   member?: Profile
+  slots?: LotSlot[]
+}
+
+export interface LotSlot {
+  id: string
+  lot_id: string
+  start_date: string
+  end_date: string
+  created_at: string
 }
 
 export interface PlanTemplate {

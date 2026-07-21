@@ -2,13 +2,13 @@
 
 import { useState, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Project, Lot, PlanTemplate, ProjectMember } from '@/types'
+import { Project, Lot, LotSlot, PlanTemplate, ProjectMember } from '@/types'
 import { User } from '@supabase/supabase-js'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import {
   Plus, LayoutGrid, Loader2, Wand2, GripVertical, Trash2,
-  Pencil, Copy, UserCog, Link2, Link2Off
+  Pencil, Copy, UserCog, Link2, Link2Off, CalendarPlus, Scissors
 } from 'lucide-react'
 import LotDialog from './LotDialog'
 
@@ -18,22 +18,12 @@ export const LOT_COLORS: Record<string, string> = {
   cyan: 'bg-cyan-500', gray: 'bg-gray-500', pink: 'bg-pink-500',
 }
 
-interface Props {
-  user: User
-  project: Project
-  isAdmin: boolean
-  initialLots: Lot[]
-  members: ProjectMember[]
-  templates: PlanTemplate[]
-}
-
 const MS_DAY = 86400000
 function daysBetween(a: Date, b: Date) { return Math.round((b.getTime() - a.getTime()) / MS_DAY) }
 function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1) }
+function iso(d: Date) { return d.toISOString().slice(0, 10) }
 const MONTHS = ['Janv', 'Févr', 'Mars', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sept', 'Oct', 'Nov', 'Déc']
-
-// Numéro de semaine ISO 8601
 function isoWeek(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
   const dayNum = (date.getUTCDay() + 6) % 7
@@ -42,6 +32,15 @@ function isoWeek(d: Date): number {
   return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * MS_DAY))
 }
 function mondayOf(d: Date) { const x = new Date(d); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() - dow); x.setHours(0, 0, 0, 0); return x }
+
+interface Props {
+  user: User
+  project: Project
+  isAdmin: boolean
+  initialLots: Lot[]
+  members: ProjectMember[]
+  templates: PlanTemplate[]
+}
 
 export default function PlanChargePanel({ user, project, isAdmin, initialLots, members, templates }: Props) {
   const supabase = createClient()
@@ -53,255 +52,208 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
   const [confirmDeleteLot, setConfirmDeleteLot] = useState<Lot | null>(null)
   const [deletingLot, setDeletingLot] = useState(false)
 
-  const doDeleteLot = async () => {
-    if (!confirmDeleteLot) return
-    setDeletingLot(true)
-    const { error } = await supabase.from('lots').delete().eq('id', confirmDeleteLot.id)
-    if (error) toast.error(`Erreur: ${error.message}`)
-    else {
-      setLots(prev => prev.filter(l => l.id !== confirmDeleteLot.id))
-      toast.success('Lot supprimé')
-      setConfirmDeleteLot(null)
-    }
-    setDeletingLot(false)
-  }
+  const sortedLots = useMemo(
+    () => [...lots].sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at)),
+    [lots]
+  )
 
-  const iso = (d: Date) => d.toISOString().slice(0, 10)
-
-  // Décale un lot ET tous ses dépendants (récursif) de `delta` jours
-  const cascadeShift = (rootId: string, delta: number, source: Lot[]): Map<string, { start: string; end: string }> => {
-    const byId = new Map(source.map(l => [l.id, l]))
-    const result = new Map<string, { start: string; end: string }>()
-    const visit = (id: string) => {
-      const lot = byId.get(id)
-      if (!lot || !lot.start_date || !lot.end_date || result.has(id)) return
-      result.set(id, {
-        start: iso(addDays(new Date(lot.start_date), delta)),
-        end: iso(addDays(new Date(lot.end_date), delta)),
-      })
-      source.filter(l => l.depends_on === id).forEach(dep => visit(dep.id))
-    }
-    visit(rootId)
-    return result
-  }
-
-  const applyCascade = async (rootId: string, delta: number) => {
-    if (delta === 0) return
-    const changes = cascadeShift(rootId, delta, lots)
-    setLots(prev => prev.map(l => changes.has(l.id) ? { ...l, start_date: changes.get(l.id)!.start, end_date: changes.get(l.id)!.end } : l))
-    const updates = Array.from(changes.entries()).map(([id, v]) =>
-      supabase.from('lots').update({ start_date: v.start, end_date: v.end, updated_at: new Date().toISOString() }).eq('id', id)
-    )
-    const res = await Promise.all(updates)
-    if (res.some(r => r.error)) toast.error('Erreur lors du décalage')
-  }
-
-  // --- Menu contextuel (clic droit) ---
-  const [ctxMenu, setCtxMenu] = useState<{ lot: Lot; x: number; y: number } | null>(null)
-  const [ctxSub, setCtxSub] = useState<'member' | 'link' | null>(null)
-
-  const openContext = (e: React.MouseEvent, lot: Lot) => {
-    if (!isAdmin) return
-    e.preventDefault()
-    setCtxSub(null)
-    setCtxMenu({ lot, x: e.clientX, y: e.clientY })
-  }
-
-  const duplicateLot = (lot: Lot) => {
-    setCtxMenu(null)
-    setCreating(true)
-    setEditingLot({ ...lot, id: '', name: `${lot.name} (copie)`, progress: 0, position: lots.length, depends_on: null, created_at: '', updated_at: '' })
-  }
-
-  const reassignLot = async (lot: Lot, memberId: string | null) => {
-    setCtxMenu(null)
-    const { data, error } = await supabase.from('lots').update({ member_id: memberId }).eq('id', lot.id).select('*, member:profiles(*)').single()
-    if (error) toast.error(`Erreur: ${error.message}`)
-    else { setLots(prev => prev.map(l => l.id === lot.id ? data : l)); toast.success('Lot réaffecté') }
-  }
-
-  const linkLot = async (lot: Lot, targetId: string | null) => {
-    setCtxMenu(null)
-    const { data, error } = await supabase.from('lots').update({ depends_on: targetId }).eq('id', lot.id).select('*, member:profiles(*)').single()
-    if (error) { toast.error(`Erreur: ${error.message}`); return }
-    setLots(prev => prev.map(l => l.id === lot.id ? data : l))
-    toast.success(targetId ? 'Lot lié' : 'Lien retiré')
-  }
-
-  // --- Déplacement d'une barre (change les dates + cascade) ---
-  const timelineRef = useRef<HTMLDivElement>(null)
-  const barDrag = useRef<{ id: string; startX: number; s: Date; e: Date; delta: number; moved: boolean } | null>(null)
-  const [previewShift, setPreviewShift] = useState<Map<string, { start: string; end: string }> | null>(null)
-  const justDragged = useRef(false)
-
-  const onBarPointerDown = (e: React.PointerEvent, lot: Lot) => {
-    if (!isAdmin || !lot.start_date || !lot.end_date) return
-    e.stopPropagation()
-    barDrag.current = { id: lot.id, startX: e.clientX, s: new Date(lot.start_date), e: new Date(lot.end_date), delta: 0, moved: false }
-    document.addEventListener('pointermove', onBarPointerMove)
-    document.addEventListener('pointerup', onBarPointerUp)
-  }
-  const onBarPointerMove = (ev: PointerEvent) => {
-    const d = barDrag.current
-    if (!d) return
-    const w = timelineRef.current?.clientWidth || 1
-    const pxPerDay = w / timelineDaysRef.current
-    const delta = Math.round((ev.clientX - d.startX) / pxPerDay)
-    if (delta !== d.delta) {
-      d.delta = delta
-      if (delta !== 0) d.moved = true
-      setPreviewShift(cascadeShift(d.id, delta, lotsRef.current))
-    }
-  }
-  const onBarPointerUp = () => {
-    const d = barDrag.current
-    document.removeEventListener('pointermove', onBarPointerMove)
-    document.removeEventListener('pointerup', onBarPointerUp)
-    setPreviewShift(null)
-    if (d && d.moved) { justDragged.current = true; applyCascade(d.id, d.delta) }
-    barDrag.current = null
-  }
-  // refs pour lire l'état à jour dans les listeners globaux
-  const lotsRef = useRef(lots); lotsRef.current = lots
-  const timelineDaysRef = useRef(30)
-
-  // Fenêtre temporelle du Gantt
+  // Fenêtre temporelle à partir de tous les créneaux
   const timeline = useMemo(() => {
-    const dated = lots.filter(l => l.start_date && l.end_date)
+    const dates: number[] = []
+    lots.forEach(l => (l.slots || []).forEach(s => { dates.push(new Date(s.start_date).getTime(), new Date(s.end_date).getTime()) }))
     let min: Date, max: Date
-    if (dated.length === 0) {
-      min = startOfMonth(new Date())
-      max = addDays(min, 180)
-    } else {
-      min = startOfMonth(new Date(Math.min(...dated.map(l => new Date(l.start_date!).getTime()))))
-      max = new Date(Math.max(...dated.map(l => new Date(l.end_date!).getTime())))
-      max = addDays(max, 7)
-    }
+    if (dates.length === 0) { min = startOfMonth(new Date()); max = addDays(min, 180) }
+    else { min = startOfMonth(new Date(Math.min(...dates))); max = addDays(new Date(Math.max(...dates)), 7) }
     const totalDays = Math.max(daysBetween(min, max), 30)
-    // Colonnes mensuelles
     const months: { label: string; leftPct: number; widthPct: number }[] = []
     let cursor = new Date(min)
     while (cursor < max) {
       const next = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
       const segEnd = next < max ? next : max
-      const leftPct = (daysBetween(min, cursor) / totalDays) * 100
-      const widthPct = (daysBetween(cursor, segEnd) / totalDays) * 100
-      months.push({ label: `${MONTHS[cursor.getMonth()]} ${String(cursor.getFullYear()).slice(2)}`, leftPct, widthPct })
+      months.push({ label: `${MONTHS[cursor.getMonth()]} ${String(cursor.getFullYear()).slice(2)}`, leftPct: (daysBetween(min, cursor) / totalDays) * 100, widthPct: (daysBetween(cursor, segEnd) / totalDays) * 100 })
       cursor = next
     }
-    // Colonnes hebdomadaires (numéros de semaine)
     const weeks: { label: string; leftPct: number; widthPct: number }[] = []
     let wc = mondayOf(min)
     while (wc < max) {
       const wEnd = addDays(wc, 7)
-      const leftPct = (daysBetween(min, wc) / totalDays) * 100
-      const widthPct = (daysBetween(wc, wEnd < max ? wEnd : max) / totalDays) * 100
-      weeks.push({ label: `S${isoWeek(wc)}`, leftPct, widthPct })
+      weeks.push({ label: `S${isoWeek(wc)}`, leftPct: (daysBetween(min, wc) / totalDays) * 100, widthPct: (daysBetween(wc, wEnd < max ? wEnd : max) / totalDays) * 100 })
       wc = wEnd
     }
     return { min, max, totalDays, months, weeks }
   }, [lots])
 
-  timelineDaysRef.current = timeline.totalDays
+  // ---- Déplacement d'un créneau à la souris (pointer capture) ----
+  const timelineRef = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<{ slotId: string; lotId: string; startX: number; delta: number; moved: boolean } | null>(null)
 
-  // Applique l'aperçu de déplacement (pendant le drag) à un lot
-  const effectiveDates = (lot: Lot): { start: string | null; end: string | null } => {
-    const p = previewShift?.get(lot.id)
-    return p ? { start: p.start, end: p.end } : { start: lot.start_date, end: lot.end_date }
+  const pxPerDay = () => (timelineRef.current?.clientWidth || 1) / timeline.totalDays
+
+  const onBarDown = (e: React.PointerEvent, lot: Lot, slot: LotSlot) => {
+    if (!isAdmin) return
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    setDrag({ slotId: slot.id, lotId: lot.id, startX: e.clientX, delta: 0, moved: false })
+  }
+  const onBarMove = (e: React.PointerEvent) => {
+    if (!drag) return
+    const delta = Math.round((e.clientX - drag.startX) / pxPerDay())
+    if (delta !== drag.delta) setDrag({ ...drag, delta, moved: drag.moved || delta !== 0 })
+  }
+  const onBarUp = async (e: React.PointerEvent, lot: Lot, slot: LotSlot) => {
+    if (!drag) return
+    ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+    const d = drag
+    setDrag(null)
+    if (!d.moved || d.delta === 0) return
+
+    // Décale le créneau + tous les créneaux des lots dépendants (cascade)
+    const newSlots = new Map<string, { start: string; end: string }>()
+    newSlots.set(slot.id, { start: iso(addDays(new Date(slot.start_date), d.delta)), end: iso(addDays(new Date(slot.end_date), d.delta)) })
+    const shiftDependents = (lotId: string) => {
+      lots.filter(l => l.depends_on === lotId).forEach(dep => {
+        (dep.slots || []).forEach(s => {
+          if (!newSlots.has(s.id)) newSlots.set(s.id, { start: iso(addDays(new Date(s.start_date), d.delta)), end: iso(addDays(new Date(s.end_date), d.delta)) })
+        })
+        shiftDependents(dep.id)
+      })
+    }
+    shiftDependents(lot.id)
+
+    setLots(prev => prev.map(l => ({ ...l, slots: (l.slots || []).map(s => newSlots.has(s.id) ? { ...s, start_date: newSlots.get(s.id)!.start, end_date: newSlots.get(s.id)!.end } : s) })))
+    const updates = Array.from(newSlots.entries()).map(([id, v]) => supabase.from('lot_slots').update({ start_date: v.start, end_date: v.end }).eq('id', id))
+    const res = await Promise.all(updates)
+    if (res.some(r => r.error)) toast.error('Erreur lors du déplacement')
   }
 
-  const barGeom = (lot: Lot) => {
-    const { start, end } = effectiveDates(lot)
-    if (!start || !end) return null
-    const s = new Date(start)
-    const e = new Date(end)
+  // Géométrie d'un créneau (avec aperçu pendant le drag)
+  const slotGeom = (lot: Lot, slot: LotSlot) => {
+    let s = new Date(slot.start_date)
+    let e = new Date(slot.end_date)
+    if (drag && (drag.slotId === slot.id || (lot.depends_on && isDependentOfDragged(lot.id)))) {
+      s = addDays(s, drag.delta); e = addDays(e, drag.delta)
+    }
     const left = (daysBetween(timeline.min, s) / timeline.totalDays) * 100
-    const width = Math.max((daysBetween(s, e) / timeline.totalDays) * 100, 1.5)
+    const width = Math.max((daysBetween(s, e) / timeline.totalDays + 1 / timeline.totalDays) * 100, 1.5)
     return { left, width }
   }
-
-  const sortedLots = [...lots].sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at))
-
-  // --- Glisser-déposer pour réordonner ---
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [overId, setOverId] = useState<string | null>(null)
-
-  const handleDrop = async (targetId: string) => {
-    if (!dragId || dragId === targetId) { setDragId(null); setOverId(null); return }
-    const ordered = [...sortedLots]
-    const from = ordered.findIndex(l => l.id === dragId)
-    const to = ordered.findIndex(l => l.id === targetId)
-    if (from === -1 || to === -1) { setDragId(null); setOverId(null); return }
-    const [moved] = ordered.splice(from, 1)
-    ordered.splice(to, 0, moved)
-    // Réassigner les positions
-    const repositioned = ordered.map((l, i) => ({ ...l, position: i }))
-    setLots(repositioned)
-    setDragId(null); setOverId(null)
-    // Persister
-    const updates = repositioned.map(l =>
-      supabase.from('lots').update({ position: l.position }).eq('id', l.id)
-    )
-    const results = await Promise.all(updates)
-    if (results.some(r => r.error)) toast.error('Erreur lors du réordonnancement')
+  // un lot est-il (récursivement) dépendant du lot en cours de drag ?
+  const isDependentOfDragged = (lotId: string): boolean => {
+    if (!drag) return false
+    let cur = lots.find(l => l.id === lotId)
+    const seen = new Set<string>()
+    while (cur?.depends_on && !seen.has(cur.id)) {
+      seen.add(cur.id)
+      if (cur.depends_on === drag.lotId) return true
+      cur = lots.find(l => l.id === cur!.depends_on)
+    }
+    return false
   }
 
+  // ---- Réordonnancement des lignes (grip) ----
+  const [rowDragId, setRowDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+  const handleRowDrop = async (targetId: string) => {
+    if (!rowDragId || rowDragId === targetId) { setRowDragId(null); setOverId(null); return }
+    const ordered = [...sortedLots]
+    const from = ordered.findIndex(l => l.id === rowDragId)
+    const to = ordered.findIndex(l => l.id === targetId)
+    if (from === -1 || to === -1) { setRowDragId(null); setOverId(null); return }
+    const [m] = ordered.splice(from, 1); ordered.splice(to, 0, m)
+    const repositioned = ordered.map((l, i) => ({ ...l, position: i }))
+    setLots(repositioned); setRowDragId(null); setOverId(null)
+    await Promise.all(repositioned.map(l => supabase.from('lots').update({ position: l.position }).eq('id', l.id)))
+  }
+
+  // ---- Créer / modèle ----
   const handleCreateBlank = () => {
     setCreating(true)
-    setEditingLot({
-      id: '', project_id: project.id, name: '', member_id: null, trade: null,
-      start_date: null, end_date: null, progress: 0, color: 'blue',
-      position: lots.length, depends_on: null, created_at: '', updated_at: '',
-    })
+    setEditingLot({ id: '', project_id: project.id, name: '', member_id: null, trade: null, start_date: null, end_date: null, progress: 0, color: 'blue', position: lots.length, depends_on: null, created_at: '', updated_at: '', slots: [] })
   }
 
   const applyTemplate = async (tpl: PlanTemplate) => {
     setApplyingTpl(true)
-    // Charger les lots du modèle
-    const { data: tplLots } = await supabase
-      .from('plan_template_lots')
-      .select('*')
-      .eq('template_id', tpl.id)
-      .order('position')
-
-    if (!tplLots || tplLots.length === 0) {
-      toast.error('Ce modèle ne contient aucun lot')
-      setApplyingTpl(false)
-      return
-    }
-
-    // Séquencer les dates à partir d'aujourd'hui
+    const { data: tplLots } = await supabase.from('plan_template_lots').select('*').eq('template_id', tpl.id).order('position')
+    if (!tplLots || tplLots.length === 0) { toast.error('Modèle vide'); setApplyingTpl(false); return }
     let cursor = new Date()
-    const rows = tplLots.map((tl, i) => {
+    const created: Lot[] = []
+    for (let i = 0; i < tplLots.length; i++) {
+      const tl = tplLots[i]
       const start = new Date(cursor)
       const end = addDays(start, Math.max(tl.duration_days - 1, 0))
       cursor = addDays(end, 1)
-      return {
-        project_id: project.id,
-        name: tl.name,
-        trade: tl.trade,
-        color: tl.color,
-        position: lots.length + i,
-        start_date: start.toISOString().slice(0, 10),
-        end_date: end.toISOString().slice(0, 10),
-        progress: 0,
-      }
-    })
-
-    const { data, error } = await supabase.from('lots').insert(rows).select('*, member:profiles(*)')
-    if (error) {
-      toast.error(`Erreur: ${error.message}`)
-    } else {
-      setLots(prev => [...prev, ...(data || [])])
-      toast.success(`${data?.length} lots créés depuis « ${tpl.name} »`)
-      setShowTemplates(false)
+      const { data: lot, error } = await supabase.from('lots').insert({ project_id: project.id, name: tl.name, trade: tl.trade, color: tl.color, position: lots.length + i, progress: 0 }).select('*, member:profiles(*)').single()
+      if (error || !lot) continue
+      const { data: slot } = await supabase.from('lot_slots').insert({ lot_id: lot.id, start_date: iso(start), end_date: iso(end) }).select().single()
+      created.push({ ...lot, slots: slot ? [slot] : [] })
     }
-    setApplyingTpl(false)
+    setLots(prev => [...prev, ...created])
+    toast.success(`${created.length} lots créés depuis « ${tpl.name} »`)
+    setShowTemplates(false); setApplyingTpl(false)
   }
+
+  // ---- Actions lot ----
+  const doDeleteLot = async () => {
+    if (!confirmDeleteLot) return
+    setDeletingLot(true)
+    const { error } = await supabase.from('lots').delete().eq('id', confirmDeleteLot.id)
+    if (error) toast.error(`Erreur: ${error.message}`)
+    else { setLots(prev => prev.filter(l => l.id !== confirmDeleteLot.id)); toast.success('Lot supprimé'); setConfirmDeleteLot(null) }
+    setDeletingLot(false)
+  }
+
+  const duplicateLot = (lot: Lot) => { setCtxMenu(null); setCreating(true); setEditingLot({ ...lot, id: '', name: `${lot.name} (copie)`, progress: 0, position: lots.length, depends_on: null, created_at: '', updated_at: '', slots: [] }) }
+
+  const reassignLot = async (lot: Lot, memberId: string | null) => {
+    setCtxMenu(null)
+    const { data, error } = await supabase.from('lots').update({ member_id: memberId }).eq('id', lot.id).select('*, member:profiles(*), slots:lot_slots(*)').single()
+    if (error) toast.error(`Erreur: ${error.message}`); else { setLots(prev => prev.map(l => l.id === lot.id ? data : l)); toast.success('Lot réaffecté') }
+  }
+
+  const linkLot = async (lot: Lot, targetId: string | null) => {
+    setCtxMenu(null)
+    const { data, error } = await supabase.from('lots').update({ depends_on: targetId }).eq('id', lot.id).select('*, member:profiles(*), slots:lot_slots(*)').single()
+    if (error) { toast.error(`Erreur: ${error.message}`); return }
+    setLots(prev => prev.map(l => l.id === lot.id ? data : l)); toast.success(targetId ? 'Lot lié' : 'Lien retiré')
+  }
+
+  // Ajouter un créneau à un lot
+  const addSlot = async (lot: Lot) => {
+    setCtxMenu(null)
+    const existing = lot.slots || []
+    let start: Date
+    if (existing.length) start = addDays(new Date(Math.max(...existing.map(s => new Date(s.end_date).getTime()))), 3)
+    else start = new Date()
+    const end = addDays(start, 4)
+    const { data, error } = await supabase.from('lot_slots').insert({ lot_id: lot.id, start_date: iso(start), end_date: iso(end) }).select().single()
+    if (error) { toast.error(`Erreur: ${error.message}`); return }
+    setLots(prev => prev.map(l => l.id === lot.id ? { ...l, slots: [...(l.slots || []), data] } : l))
+    toast.success('Créneau ajouté')
+  }
+
+  const deleteSlot = async (lot: Lot, slot: LotSlot) => {
+    setCtxMenu(null)
+    const { error } = await supabase.from('lot_slots').delete().eq('id', slot.id)
+    if (error) { toast.error(`Erreur: ${error.message}`); return }
+    setLots(prev => prev.map(l => l.id === lot.id ? { ...l, slots: (l.slots || []).filter(s => s.id !== slot.id) } : l))
+    toast.success('Créneau supprimé')
+  }
+
+  // ---- Menu contextuel ----
+  const [ctxMenu, setCtxMenu] = useState<{ lot: Lot; slot: LotSlot | null; x: number; y: number } | null>(null)
+  const [ctxSub, setCtxSub] = useState<'member' | 'link' | null>(null)
+  const openContext = (e: React.MouseEvent, lot: Lot, slot: LotSlot | null) => {
+    if (!isAdmin) return
+    e.preventDefault(); e.stopPropagation()
+    setCtxSub(null); setCtxMenu({ lot, slot, x: e.clientX, y: e.clientY })
+  }
+
+  const winW = typeof window !== 'undefined' ? window.innerWidth : 9999
+  const winH = typeof window !== 'undefined' ? window.innerHeight : 9999
 
   return (
     <div className="h-full flex flex-col bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* Barre d'actions */}
+      {/* Actions */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex-shrink-0">
         <LayoutGrid size={15} className="text-gray-500" />
         <h3 className="font-semibold text-gray-800 text-sm flex-1">Plan de charge</h3>
@@ -318,14 +270,8 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
                     {templates.length === 0 ? (
                       <p className="text-xs text-gray-400 px-3 py-2">Aucun modèle. Créez-en dans Paramètres.</p>
                     ) : templates.map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => applyTemplate(t)}
-                        disabled={applyingTpl}
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 flex items-center gap-2"
-                      >
-                        {applyingTpl ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} className="text-orange-500" />}
-                        {t.name}
+                      <button key={t.id} onClick={() => applyTemplate(t)} disabled={applyingTpl} className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 flex items-center gap-2">
+                        {applyingTpl ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} className="text-orange-500" />} {t.name}
                       </button>
                     ))}
                   </div>
@@ -339,7 +285,6 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
         )}
       </div>
 
-      {/* Gantt */}
       {sortedLots.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
           <LayoutGrid size={40} className="text-gray-300 mb-3" />
@@ -349,24 +294,20 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
       ) : (
         <div className="flex-1 overflow-auto">
           <div className="min-w-[820px]">
-            {/* En-tête : mois + semaines */}
+            {/* En-tête */}
             <div className="flex sticky top-0 z-10 bg-white border-b border-gray-200">
               <div className="w-56 shrink-0 px-3 flex items-center text-xs font-semibold text-gray-500 border-r border-gray-100">Lot / Adhérent</div>
               <div className="flex-1" ref={timelineRef}>
-                {/* Mois */}
                 <div className="relative h-6 border-b border-gray-100">
                   {timeline.months.map((m, i) => (
-                    <div key={i} className="absolute top-0 h-full border-l border-gray-200 flex items-center px-1.5"
-                      style={{ left: `${m.leftPct}%`, width: `${m.widthPct}%` }}>
+                    <div key={i} className="absolute top-0 h-full border-l border-gray-200 flex items-center px-1.5" style={{ left: `${m.leftPct}%`, width: `${m.widthPct}%` }}>
                       <span className="text-[10px] font-semibold text-gray-500 truncate">{m.label}</span>
                     </div>
                   ))}
                 </div>
-                {/* Semaines */}
                 <div className="relative h-5">
                   {timeline.weeks.map((w, i) => (
-                    <div key={i} className="absolute top-0 h-full border-l border-gray-100 flex items-center justify-center"
-                      style={{ left: `${w.leftPct}%`, width: `${w.widthPct}%` }}>
+                    <div key={i} className="absolute top-0 h-full border-l border-gray-100 flex items-center justify-center" style={{ left: `${w.leftPct}%`, width: `${w.widthPct}%` }}>
                       <span className="text-[8px] text-gray-400 truncate">{w.label}</span>
                     </div>
                   ))}
@@ -374,44 +315,37 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
               </div>
             </div>
 
-            {/* Lignes de lots */}
+            {/* Lignes */}
             {sortedLots.map(lot => {
-              const g = barGeom(lot)
               const colorClass = LOT_COLORS[lot.color] || LOT_COLORS.blue
-              const isDragOver = overId === lot.id && dragId !== lot.id
+              const isDragOver = overId === lot.id && rowDragId !== lot.id
               const predecessor = lot.depends_on ? lots.find(l => l.id === lot.depends_on) : null
+              const slots = lot.slots || []
               return (
                 <div
                   key={lot.id}
-                  className={`flex items-stretch border-b border-gray-50 hover:bg-gray-50/60 group ${isDragOver ? 'border-t-2 border-t-orange-400' : ''} ${dragId === lot.id ? 'opacity-40' : ''}`}
+                  className={`flex items-stretch border-b border-gray-50 hover:bg-gray-50/60 group ${isDragOver ? 'border-t-2 border-t-orange-400' : ''} ${rowDragId === lot.id ? 'opacity-40' : ''}`}
                   onDragOver={isAdmin ? (e) => { e.preventDefault(); setOverId(lot.id) } : undefined}
-                  onDrop={isAdmin ? () => handleDrop(lot.id) : undefined}
-                  onContextMenu={(e) => openContext(e, lot)}
+                  onDrop={isAdmin ? () => handleRowDrop(lot.id) : undefined}
+                  onContextMenu={(e) => openContext(e, lot, null)}
                 >
                   {/* Colonne gauche */}
                   <div className="w-56 shrink-0 flex items-center border-r border-gray-100">
                     {isAdmin && (
-                      <span
-                        draggable
-                        onDragStart={() => setDragId(lot.id)}
-                        onDragEnd={() => { setDragId(null); setOverId(null) }}
-                        className="pl-1.5 pr-0.5 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing"
-                        title="Glisser pour réordonner"
-                      >
+                      <span draggable onDragStart={() => setRowDragId(lot.id)} onDragEnd={() => { setRowDragId(null); setOverId(null) }} className="pl-1.5 pr-0.5 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing" title="Réordonner">
                         <GripVertical size={14} />
                       </span>
                     )}
                     <button onClick={() => setEditingLot(lot)} className={`flex-1 min-w-0 px-2 py-2 text-left ${!isAdmin ? 'pl-3' : ''}`}>
                       <p className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
                         {lot.name}
+                        {slots.length > 1 && <span className="text-[9px] text-gray-400 font-normal shrink-0">({slots.length} créneaux)</span>}
                         {predecessor && <Link2 size={11} className="text-gray-300 shrink-0" />}
                       </p>
-                      <div className="flex items-center gap-1 mt-0.5">
+                      <div className="mt-0.5">
                         {lot.member ? (
                           <span className="flex items-center gap-1 text-[11px] text-gray-500 truncate">
-                            <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-[8px] font-bold shrink-0">
-                              {(lot.member.full_name || 'U')[0].toUpperCase()}
-                            </span>
+                            <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-[8px] font-bold shrink-0">{(lot.member.full_name || 'U')[0].toUpperCase()}</span>
                             {lot.member.company || lot.member.full_name}
                           </span>
                         ) : predecessor ? (
@@ -422,31 +356,32 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
                       </div>
                     </button>
                   </div>
-                  {/* Piste Gantt */}
-                  <div className="flex-1 relative min-h-[44px]">
-                    {/* gridlines hebdomadaires */}
-                    {timeline.weeks.map((w, i) => (
-                      <div key={i} className="absolute top-0 h-full border-l border-gray-50" style={{ left: `${w.leftPct}%` }} />
-                    ))}
-                    {timeline.months.map((m, i) => (
-                      <div key={`m${i}`} className="absolute top-0 h-full border-l border-gray-200" style={{ left: `${m.leftPct}%` }} />
-                    ))}
-                    {g ? (
-                      <div
-                        onPointerDown={(e) => onBarPointerDown(e, lot)}
-                        onClick={() => { if (justDragged.current) { justDragged.current = false; return } setEditingLot(lot) }}
-                        className={`absolute top-1/2 -translate-y-1/2 h-5 rounded ${colorClass} shadow-sm overflow-hidden ${isAdmin ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${previewShift?.has(lot.id) ? 'ring-2 ring-orange-400' : ''}`}
-                        style={{ left: `${g.left}%`, width: `${g.width}%`, touchAction: 'none' }}
-                        title={`${lot.name} — ${lot.progress}%${isAdmin ? ' (glisser pour déplacer)' : ''}`}
-                      >
-                        <div className="h-full bg-black/25 pointer-events-none" style={{ width: `${lot.progress}%` }} />
-                        {lot.progress > 0 && (
-                          <span className="absolute inset-0 flex items-center justify-center text-[9px] text-white font-medium pointer-events-none">{lot.progress}%</span>
-                        )}
-                      </div>
-                    ) : (
-                      <button onClick={() => setEditingLot(lot)} className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-300 italic">Sans dates — cliquer pour planifier</button>
-                    )}
+                  {/* Piste */}
+                  <div className="flex-1 relative min-h-[44px]" onContextMenu={(e) => openContext(e, lot, null)}>
+                    {timeline.weeks.map((w, i) => <div key={i} className="absolute top-0 h-full border-l border-gray-50" style={{ left: `${w.leftPct}%` }} />)}
+                    {timeline.months.map((m, i) => <div key={`m${i}`} className="absolute top-0 h-full border-l border-gray-200" style={{ left: `${m.leftPct}%` }} />)}
+                    {slots.length === 0 ? (
+                      <button onClick={() => setEditingLot(lot)} className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-300 italic">Sans créneau — cliquer pour planifier</button>
+                    ) : slots.map(slot => {
+                      const g = slotGeom(lot, slot)
+                      const isDragging = drag?.slotId === slot.id
+                      return (
+                        <div
+                          key={slot.id}
+                          onPointerDown={(e) => onBarDown(e, lot, slot)}
+                          onPointerMove={onBarMove}
+                          onPointerUp={(e) => onBarUp(e, lot, slot)}
+                          onClick={() => { if (drag?.moved) return; setEditingLot(lot) }}
+                          onContextMenu={(e) => openContext(e, lot, slot)}
+                          className={`absolute top-1/2 -translate-y-1/2 h-5 rounded ${colorClass} shadow-sm overflow-hidden ${isAdmin ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${isDragging ? 'ring-2 ring-orange-400 z-10' : ''}`}
+                          style={{ left: `${g.left}%`, width: `${g.width}%`, touchAction: 'none' }}
+                          title={`${lot.name} — ${lot.progress}%${isAdmin ? ' • glisser pour déplacer, clic droit pour options' : ''}`}
+                        >
+                          <div className="h-full bg-black/25 pointer-events-none" style={{ width: `${lot.progress}%` }} />
+                          {lot.progress > 0 && <span className="absolute inset-0 flex items-center justify-center text-[9px] text-white font-medium pointer-events-none">{lot.progress}%</span>}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )
@@ -463,26 +398,16 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
           userId={user.id}
           members={members}
           onClose={() => { setEditingLot(null); setCreating(false) }}
-          onSaved={(l) => {
-            setLots(prev => {
-              const exists = prev.some(x => x.id === l.id)
-              return exists ? prev.map(x => x.id === l.id ? l : x) : [...prev, l]
-            })
-            setEditingLot(null); setCreating(false)
-          }}
+          onSaved={(l) => { setLots(prev => { const ex = prev.some(x => x.id === l.id); return ex ? prev.map(x => x.id === l.id ? l : x) : [...prev, l] }); setEditingLot(null); setCreating(false) }}
           onDeleted={(id) => { setLots(prev => prev.filter(x => x.id !== id)); setEditingLot(null); setCreating(false) }}
         />
       )}
 
-      {/* Confirmation suppression rapide (depuis la ligne) */}
       {confirmDeleteLot && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setConfirmDeleteLot(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-2">
-              <div className="bg-red-100 text-red-600 p-2 rounded-lg"><Trash2 size={18} /></div>
-              <h3 className="font-bold text-gray-900">Supprimer ce lot ?</h3>
-            </div>
-            <p className="text-sm text-gray-500 mb-4">Le lot <strong>{confirmDeleteLot.name}</strong> sera supprimé du plan de charge.</p>
+            <div className="flex items-center gap-2 mb-2"><div className="bg-red-100 text-red-600 p-2 rounded-lg"><Trash2 size={18} /></div><h3 className="font-bold text-gray-900">Supprimer ce lot ?</h3></div>
+            <p className="text-sm text-gray-500 mb-4">Le lot <strong>{confirmDeleteLot.name}</strong> et tous ses créneaux seront supprimés.</p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setConfirmDeleteLot(null)} disabled={deletingLot}>Annuler</Button>
               <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={doDeleteLot} disabled={deletingLot}>
@@ -493,65 +418,38 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
         </div>
       )}
 
-      {/* Menu contextuel (clic droit) */}
+      {/* Menu contextuel */}
       {ctxMenu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }} />
-          <div
-            className="fixed z-50 w-52 bg-white rounded-lg shadow-xl border border-gray-100 py-1 text-sm"
-            style={{ left: Math.min(ctxMenu.x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 220), top: Math.min(ctxMenu.y, (typeof window !== 'undefined' ? window.innerHeight : 9999) - 280) }}
-          >
+          <div className="fixed z-50 w-56 bg-white rounded-lg shadow-xl border border-gray-100 py-1 text-sm" style={{ left: Math.min(ctxMenu.x, winW - 230), top: Math.min(ctxMenu.y, winH - 320) }}>
             <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 truncate border-b border-gray-50">{ctxMenu.lot.name}</div>
-
-            <button onClick={() => { const l = ctxMenu.lot; setCtxMenu(null); setEditingLot(l) }} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50">
-              <Pencil size={14} className="text-gray-400" /> Modifier
-            </button>
-            <button onClick={() => duplicateLot(ctxMenu.lot)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50">
-              <Copy size={14} className="text-gray-400" /> Dupliquer
-            </button>
-
-            {/* Réaffecter */}
+            <button onClick={() => { const l = ctxMenu.lot; setCtxMenu(null); setEditingLot(l) }} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><Pencil size={14} className="text-gray-400" /> Modifier</button>
+            <button onClick={() => addSlot(ctxMenu.lot)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><CalendarPlus size={14} className="text-gray-400" /> Ajouter un créneau</button>
+            {ctxMenu.slot && (
+              <button onClick={() => deleteSlot(ctxMenu.lot, ctxMenu.slot!)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><Scissors size={14} className="text-gray-400" /> Supprimer ce créneau</button>
+            )}
+            <button onClick={() => duplicateLot(ctxMenu.lot)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><Copy size={14} className="text-gray-400" /> Dupliquer le lot</button>
             <div className="relative" onMouseEnter={() => setCtxSub('member')}>
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50">
-                <UserCog size={14} className="text-gray-400" /> Réaffecter à…
-              </button>
+              <button className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><UserCog size={14} className="text-gray-400" /> Réaffecter à…</button>
               {ctxSub === 'member' && (
-                <div className="absolute left-full top-0 -ml-1 w-52 bg-white rounded-lg shadow-xl border border-gray-100 py-1 max-h-64 overflow-y-auto">
+                <div className="absolute right-full top-0 -mr-1 w-52 bg-white rounded-lg shadow-xl border border-gray-100 py-1 max-h-64 overflow-y-auto">
                   <button onClick={() => reassignLot(ctxMenu.lot, null)} className="w-full text-left px-3 py-2 text-gray-500 italic hover:bg-gray-50">— Non assigné —</button>
-                  {members.map(m => (
-                    <button key={m.user_id} onClick={() => reassignLot(ctxMenu.lot, m.user_id)} className="w-full text-left px-3 py-2 text-gray-700 hover:bg-orange-50 truncate">
-                      {m.profile?.full_name || 'Utilisateur'}{m.profile?.company ? ` — ${m.profile.company}` : ''}
-                    </button>
-                  ))}
+                  {members.map(m => <button key={m.user_id} onClick={() => reassignLot(ctxMenu.lot, m.user_id)} className="w-full text-left px-3 py-2 text-gray-700 hover:bg-orange-50 truncate">{m.profile?.full_name || 'Utilisateur'}{m.profile?.company ? ` — ${m.profile.company}` : ''}</button>)}
                 </div>
               )}
             </div>
-
-            {/* Lier */}
             <div className="relative" onMouseEnter={() => setCtxSub('link')}>
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50">
-                <Link2 size={14} className="text-gray-400" /> Lier à…
-              </button>
+              <button className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><Link2 size={14} className="text-gray-400" /> Lier à…</button>
               {ctxSub === 'link' && (
-                <div className="absolute left-full top-0 -ml-1 w-52 bg-white rounded-lg shadow-xl border border-gray-100 py-1 max-h-64 overflow-y-auto">
-                  {ctxMenu.lot.depends_on && (
-                    <button onClick={() => linkLot(ctxMenu.lot, null)} className="w-full flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50">
-                      <Link2Off size={13} /> Retirer le lien
-                    </button>
-                  )}
-                  {sortedLots.filter(l => l.id !== ctxMenu.lot.id).map(l => (
-                    <button key={l.id} onClick={() => linkLot(ctxMenu.lot, l.id)} className={`w-full text-left px-3 py-2 hover:bg-orange-50 truncate ${ctxMenu.lot.depends_on === l.id ? 'text-orange-600 font-medium' : 'text-gray-700'}`}>
-                      {l.name}
-                    </button>
-                  ))}
+                <div className="absolute right-full top-0 -mr-1 w-52 bg-white rounded-lg shadow-xl border border-gray-100 py-1 max-h-64 overflow-y-auto">
+                  {ctxMenu.lot.depends_on && <button onClick={() => linkLot(ctxMenu.lot, null)} className="w-full flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50"><Link2Off size={13} /> Retirer le lien</button>}
+                  {sortedLots.filter(l => l.id !== ctxMenu.lot.id).map(l => <button key={l.id} onClick={() => linkLot(ctxMenu.lot, l.id)} className={`w-full text-left px-3 py-2 hover:bg-orange-50 truncate ${ctxMenu.lot.depends_on === l.id ? 'text-orange-600 font-medium' : 'text-gray-700'}`}>{l.name}</button>)}
                 </div>
               )}
             </div>
-
             <div className="border-t border-gray-50 my-1" />
-            <button onClick={() => { const l = ctxMenu.lot; setCtxMenu(null); setConfirmDeleteLot(l) }} className="w-full flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50">
-              <Trash2 size={14} /> Supprimer
-            </button>
+            <button onClick={() => { const l = ctxMenu.lot; setCtxMenu(null); setConfirmDeleteLot(l) }} className="w-full flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50"><Trash2 size={14} /> Supprimer le lot</button>
           </div>
         </>
       )}
