@@ -37,6 +37,7 @@ export interface Lot {
   progress: number
   color: string
   position: number
+  depends_on: string | null
   created_at: string
   updated_at: string
   member?: Profile
