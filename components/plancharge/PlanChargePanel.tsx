@@ -19,6 +19,7 @@ export const LOT_COLORS: Record<string, string> = {
 }
 
 const MS_DAY = 86400000
+const ROW_H = 48 // hauteur fixe d'une ligne (px) — nécessaire pour tracer les flèches
 function daysBetween(a: Date, b: Date) { return Math.round((b.getTime() - a.getTime()) / MS_DAY) }
 function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1) }
@@ -251,6 +252,28 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
   const winW = typeof window !== 'undefined' ? window.innerWidth : 9999
   const winH = typeof window !== 'undefined' ? window.innerHeight : 9999
 
+  // Flèches de dépendance : du dernier créneau du prédécesseur → premier créneau du dépendant
+  const rowIndex = new Map(sortedLots.map((l, i) => [l.id, i]))
+  const arrows = sortedLots.flatMap(lot => {
+    if (!lot.depends_on) return []
+    const pred = lots.find(l => l.id === lot.depends_on)
+    if (!pred) return []
+    const iDep = rowIndex.get(lot.id); const iPred = rowIndex.get(pred.id)
+    if (iDep === undefined || iPred === undefined) return []
+    const predSlots = pred.slots || []; const depSlots = lot.slots || []
+    if (predSlots.length === 0 || depSlots.length === 0) return []
+    const predLast = [...predSlots].sort((a, b) => a.end_date.localeCompare(b.end_date))[predSlots.length - 1]
+    const depFirst = [...depSlots].sort((a, b) => a.start_date.localeCompare(b.start_date))[0]
+    const pg = slotGeom(pred, predLast)
+    const dg = slotGeom(lot, depFirst)
+    const x1 = pg.left + pg.width           // fin du prédécesseur (%)
+    const x2 = dg.left                       // début du dépendant (%)
+    const midX = Math.min(x1 + 1.4, 99)
+    const y1 = iPred * ROW_H + ROW_H / 2
+    const y2 = iDep * ROW_H + ROW_H / 2
+    return [{ id: lot.id, x1, x2, midX, y1, y2 }]
+  })
+
   return (
     <div className="h-full flex flex-col bg-white rounded-xl border border-gray-200 overflow-hidden">
       {/* Actions */}
@@ -316,6 +339,22 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
             </div>
 
             {/* Lignes */}
+            <div className="relative">
+            {/* Overlay des flèches de dépendance */}
+            <svg className="absolute top-0 pointer-events-none z-20" style={{ left: 224, right: 0, width: 'calc(100% - 224px)', height: sortedLots.length * ROW_H }}>
+              <defs>
+                <marker id="dep-arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+                  <path d="M0,0 L6,3 L0,6 Z" fill="#f97316" />
+                </marker>
+              </defs>
+              {arrows.map(a => (
+                <g key={a.id}>
+                  <line x1={`${a.x1}%`} y1={a.y1} x2={`${a.midX}%`} y2={a.y1} stroke="#f9a34e" strokeWidth={1.5} />
+                  <line x1={`${a.midX}%`} y1={a.y1} x2={`${a.midX}%`} y2={a.y2} stroke="#f9a34e" strokeWidth={1.5} />
+                  <line x1={`${a.midX}%`} y1={a.y2} x2={`${a.x2}%`} y2={a.y2} stroke="#f9a34e" strokeWidth={1.5} markerEnd="url(#dep-arrow)" />
+                </g>
+              ))}
+            </svg>
             {sortedLots.map(lot => {
               const colorClass = LOT_COLORS[lot.color] || LOT_COLORS.blue
               const isDragOver = overId === lot.id && rowDragId !== lot.id
@@ -324,6 +363,7 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
               return (
                 <div
                   key={lot.id}
+                  style={{ height: ROW_H }}
                   className={`flex items-stretch border-b border-gray-50 hover:bg-gray-50/60 group ${isDragOver ? 'border-t-2 border-t-orange-400' : ''} ${rowDragId === lot.id ? 'opacity-40' : ''}`}
                   onDragOver={isAdmin ? (e) => { e.preventDefault(); setOverId(lot.id) } : undefined}
                   onDrop={isAdmin ? () => handleRowDrop(lot.id) : undefined}
@@ -386,6 +426,7 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
                 </div>
               )
             })}
+            </div>
           </div>
         </div>
       )}
