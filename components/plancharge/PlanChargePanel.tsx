@@ -6,7 +6,7 @@ import { Project, Lot, PlanTemplate, ProjectMember } from '@/types'
 import { User } from '@supabase/supabase-js'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
-import { Plus, LayoutGrid, Loader2, Wand2 } from 'lucide-react'
+import { Plus, LayoutGrid, Loader2, Wand2, GripVertical, Trash2 } from 'lucide-react'
 import LotDialog from './LotDialog'
 
 export const LOT_COLORS: Record<string, string> = {
@@ -30,6 +30,16 @@ function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDat
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1) }
 const MONTHS = ['Janv', 'Févr', 'Mars', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sept', 'Oct', 'Nov', 'Déc']
 
+// Numéro de semaine ISO 8601
+function isoWeek(d: Date): number {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const dayNum = (date.getUTCDay() + 6) % 7
+  date.setUTCDate(date.getUTCDate() - dayNum + 3)
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4))
+  return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * MS_DAY))
+}
+function mondayOf(d: Date) { const x = new Date(d); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() - dow); x.setHours(0, 0, 0, 0); return x }
+
 export default function PlanChargePanel({ user, project, isAdmin, initialLots, members, templates }: Props) {
   const supabase = createClient()
   const [lots, setLots] = useState<Lot[]>(initialLots)
@@ -37,6 +47,21 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
   const [creating, setCreating] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
   const [applyingTpl, setApplyingTpl] = useState(false)
+  const [confirmDeleteLot, setConfirmDeleteLot] = useState<Lot | null>(null)
+  const [deletingLot, setDeletingLot] = useState(false)
+
+  const doDeleteLot = async () => {
+    if (!confirmDeleteLot) return
+    setDeletingLot(true)
+    const { error } = await supabase.from('lots').delete().eq('id', confirmDeleteLot.id)
+    if (error) toast.error(`Erreur: ${error.message}`)
+    else {
+      setLots(prev => prev.filter(l => l.id !== confirmDeleteLot.id))
+      toast.success('Lot supprimé')
+      setConfirmDeleteLot(null)
+    }
+    setDeletingLot(false)
+  }
 
   // Fenêtre temporelle du Gantt
   const timeline = useMemo(() => {
@@ -62,7 +87,17 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
       months.push({ label: `${MONTHS[cursor.getMonth()]} ${String(cursor.getFullYear()).slice(2)}`, leftPct, widthPct })
       cursor = next
     }
-    return { min, max, totalDays, months }
+    // Colonnes hebdomadaires (numéros de semaine)
+    const weeks: { label: string; leftPct: number; widthPct: number }[] = []
+    let wc = mondayOf(min)
+    while (wc < max) {
+      const wEnd = addDays(wc, 7)
+      const leftPct = (daysBetween(min, wc) / totalDays) * 100
+      const widthPct = (daysBetween(wc, wEnd < max ? wEnd : max) / totalDays) * 100
+      weeks.push({ label: `S${isoWeek(wc)}`, leftPct, widthPct })
+      wc = wEnd
+    }
+    return { min, max, totalDays, months, weeks }
   }, [lots])
 
   const barGeom = (lot: Lot) => {
@@ -75,6 +110,30 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
   }
 
   const sortedLots = [...lots].sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at))
+
+  // --- Glisser-déposer pour réordonner ---
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
+  const handleDrop = async (targetId: string) => {
+    if (!dragId || dragId === targetId) { setDragId(null); setOverId(null); return }
+    const ordered = [...sortedLots]
+    const from = ordered.findIndex(l => l.id === dragId)
+    const to = ordered.findIndex(l => l.id === targetId)
+    if (from === -1 || to === -1) { setDragId(null); setOverId(null); return }
+    const [moved] = ordered.splice(from, 1)
+    ordered.splice(to, 0, moved)
+    // Réassigner les positions
+    const repositioned = ordered.map((l, i) => ({ ...l, position: i }))
+    setLots(repositioned)
+    setDragId(null); setOverId(null)
+    // Persister
+    const updates = repositioned.map(l =>
+      supabase.from('lots').update({ position: l.position }).eq('id', l.id)
+    )
+    const results = await Promise.all(updates)
+    if (results.some(r => r.error)) toast.error('Erreur lors du réordonnancement')
+  }
 
   const handleCreateBlank = () => {
     setCreating(true)
@@ -178,17 +237,29 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <div className="min-w-[720px]">
-            {/* En-tête des mois */}
+          <div className="min-w-[820px]">
+            {/* En-tête : mois + semaines */}
             <div className="flex sticky top-0 z-10 bg-white border-b border-gray-200">
-              <div className="w-56 shrink-0 px-3 py-2 text-xs font-semibold text-gray-500 border-r border-gray-100">Lot / Adhérent</div>
-              <div className="flex-1 relative h-8">
-                {timeline.months.map((m, i) => (
-                  <div key={i} className="absolute top-0 h-full border-l border-gray-100 flex items-center px-1.5"
-                    style={{ left: `${m.leftPct}%`, width: `${m.widthPct}%` }}>
-                    <span className="text-[10px] font-medium text-gray-400 truncate">{m.label}</span>
-                  </div>
-                ))}
+              <div className="w-56 shrink-0 px-3 flex items-center text-xs font-semibold text-gray-500 border-r border-gray-100">Lot / Adhérent</div>
+              <div className="flex-1">
+                {/* Mois */}
+                <div className="relative h-6 border-b border-gray-100">
+                  {timeline.months.map((m, i) => (
+                    <div key={i} className="absolute top-0 h-full border-l border-gray-200 flex items-center px-1.5"
+                      style={{ left: `${m.leftPct}%`, width: `${m.widthPct}%` }}>
+                      <span className="text-[10px] font-semibold text-gray-500 truncate">{m.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Semaines */}
+                <div className="relative h-5">
+                  {timeline.weeks.map((w, i) => (
+                    <div key={i} className="absolute top-0 h-full border-l border-gray-100 flex items-center justify-center"
+                      style={{ left: `${w.leftPct}%`, width: `${w.widthPct}%` }}>
+                      <span className="text-[8px] text-gray-400 truncate">{w.label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -196,32 +267,60 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
             {sortedLots.map(lot => {
               const g = barGeom(lot)
               const colorClass = LOT_COLORS[lot.color] || LOT_COLORS.blue
+              const isDragOver = overId === lot.id && dragId !== lot.id
               return (
-                <div key={lot.id} className="flex items-stretch border-b border-gray-50 hover:bg-gray-50/60 group">
+                <div
+                  key={lot.id}
+                  className={`flex items-stretch border-b border-gray-50 hover:bg-gray-50/60 group ${isDragOver ? 'border-t-2 border-t-orange-400' : ''} ${dragId === lot.id ? 'opacity-40' : ''}`}
+                  onDragOver={isAdmin ? (e) => { e.preventDefault(); setOverId(lot.id) } : undefined}
+                  onDrop={isAdmin ? () => handleDrop(lot.id) : undefined}
+                >
                   {/* Colonne gauche */}
-                  <button
-                    onClick={() => setEditingLot(lot)}
-                    className="w-56 shrink-0 px-3 py-2 text-left border-r border-gray-100"
-                  >
-                    <p className="text-sm font-medium text-gray-800 truncate">{lot.name}</p>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      {lot.member ? (
-                        <span className="flex items-center gap-1 text-[11px] text-gray-500 truncate">
-                          <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-[8px] font-bold">
-                            {(lot.member.full_name || 'U')[0].toUpperCase()}
+                  <div className="w-56 shrink-0 flex items-center border-r border-gray-100">
+                    {isAdmin && (
+                      <span
+                        draggable
+                        onDragStart={() => setDragId(lot.id)}
+                        onDragEnd={() => { setDragId(null); setOverId(null) }}
+                        className="pl-1.5 pr-0.5 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing"
+                        title="Glisser pour réordonner"
+                      >
+                        <GripVertical size={14} />
+                      </span>
+                    )}
+                    <button onClick={() => setEditingLot(lot)} className={`flex-1 min-w-0 px-2 py-2 text-left ${!isAdmin ? 'pl-3' : ''}`}>
+                      <p className="text-sm font-medium text-gray-800 truncate">{lot.name}</p>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        {lot.member ? (
+                          <span className="flex items-center gap-1 text-[11px] text-gray-500 truncate">
+                            <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-[8px] font-bold shrink-0">
+                              {(lot.member.full_name || 'U')[0].toUpperCase()}
+                            </span>
+                            {lot.member.company || lot.member.full_name}
                           </span>
-                          {lot.member.company || lot.member.full_name}
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-gray-300 italic">Non assigné</span>
-                      )}
-                    </div>
-                  </button>
+                        ) : (
+                          <span className="text-[11px] text-gray-300 italic">Non assigné</span>
+                        )}
+                      </div>
+                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => setConfirmDeleteLot(lot)}
+                        className="px-1.5 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Supprimer le lot"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
                   {/* Piste Gantt */}
                   <button onClick={() => setEditingLot(lot)} className="flex-1 relative min-h-[44px]">
-                    {/* lignes de mois */}
+                    {/* gridlines hebdomadaires */}
+                    {timeline.weeks.map((w, i) => (
+                      <div key={i} className="absolute top-0 h-full border-l border-gray-50" style={{ left: `${w.leftPct}%` }} />
+                    ))}
                     {timeline.months.map((m, i) => (
-                      <div key={i} className="absolute top-0 h-full border-l border-gray-50" style={{ left: `${m.leftPct}%` }} />
+                      <div key={`m${i}`} className="absolute top-0 h-full border-l border-gray-200" style={{ left: `${m.leftPct}%` }} />
                     ))}
                     {g ? (
                       <div
@@ -262,6 +361,25 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
           }}
           onDeleted={(id) => { setLots(prev => prev.filter(x => x.id !== id)); setEditingLot(null); setCreating(false) }}
         />
+      )}
+
+      {/* Confirmation suppression rapide (depuis la ligne) */}
+      {confirmDeleteLot && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setConfirmDeleteLot(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="bg-red-100 text-red-600 p-2 rounded-lg"><Trash2 size={18} /></div>
+              <h3 className="font-bold text-gray-900">Supprimer ce lot ?</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Le lot <strong>{confirmDeleteLot.name}</strong> sera supprimé du plan de charge.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmDeleteLot(null)} disabled={deletingLot}>Annuler</Button>
+              <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={doDeleteLot} disabled={deletingLot}>
+                {deletingLot ? <Loader2 size={13} className="animate-spin mr-1" /> : <Trash2 size={13} className="mr-1" />} Supprimer
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
