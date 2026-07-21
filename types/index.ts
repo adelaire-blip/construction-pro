@@ -26,6 +26,41 @@ export interface Trade {
   created_at: string
 }
 
+export interface Lot {
+  id: string
+  project_id: string
+  name: string
+  member_id: string | null
+  trade: string | null
+  start_date: string | null
+  end_date: string | null
+  progress: number
+  color: string
+  position: number
+  created_at: string
+  updated_at: string
+  member?: Profile
+}
+
+export interface PlanTemplate {
+  id: string
+  name: string
+  created_by: string | null
+  created_at: string
+  lots?: PlanTemplateLot[]
+}
+
+export interface PlanTemplateLot {
+  id: string
+  template_id: string
+  name: string
+  trade: string | null
+  position: number
+  duration_days: number
+  color: string
+  created_at: string
+}
+
 export interface Project {
   id: string
   name: string

@@ -1,0 +1,268 @@
+'use client'
+
+import { useState, useMemo } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { Project, Lot, PlanTemplate, ProjectMember } from '@/types'
+import { User } from '@supabase/supabase-js'
+import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
+import { Plus, LayoutGrid, Loader2, Wand2 } from 'lucide-react'
+import LotDialog from './LotDialog'
+
+export const LOT_COLORS: Record<string, string> = {
+  blue: 'bg-blue-500', red: 'bg-red-500', green: 'bg-green-500', yellow: 'bg-yellow-500',
+  orange: 'bg-orange-500', amber: 'bg-amber-500', teal: 'bg-teal-500', purple: 'bg-purple-500',
+  cyan: 'bg-cyan-500', gray: 'bg-gray-500', pink: 'bg-pink-500',
+}
+
+interface Props {
+  user: User
+  project: Project
+  isAdmin: boolean
+  initialLots: Lot[]
+  members: ProjectMember[]
+  templates: PlanTemplate[]
+}
+
+const MS_DAY = 86400000
+function daysBetween(a: Date, b: Date) { return Math.round((b.getTime() - a.getTime()) / MS_DAY) }
+function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDate() + n); return x }
+function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1) }
+const MONTHS = ['Janv', 'Févr', 'Mars', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sept', 'Oct', 'Nov', 'Déc']
+
+export default function PlanChargePanel({ user, project, isAdmin, initialLots, members, templates }: Props) {
+  const supabase = createClient()
+  const [lots, setLots] = useState<Lot[]>(initialLots)
+  const [editingLot, setEditingLot] = useState<Lot | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [showTemplates, setShowTemplates] = useState(false)
+  const [applyingTpl, setApplyingTpl] = useState(false)
+
+  // Fenêtre temporelle du Gantt
+  const timeline = useMemo(() => {
+    const dated = lots.filter(l => l.start_date && l.end_date)
+    let min: Date, max: Date
+    if (dated.length === 0) {
+      min = startOfMonth(new Date())
+      max = addDays(min, 180)
+    } else {
+      min = startOfMonth(new Date(Math.min(...dated.map(l => new Date(l.start_date!).getTime()))))
+      max = new Date(Math.max(...dated.map(l => new Date(l.end_date!).getTime())))
+      max = addDays(max, 7)
+    }
+    const totalDays = Math.max(daysBetween(min, max), 30)
+    // Colonnes mensuelles
+    const months: { label: string; leftPct: number; widthPct: number }[] = []
+    let cursor = new Date(min)
+    while (cursor < max) {
+      const next = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
+      const segEnd = next < max ? next : max
+      const leftPct = (daysBetween(min, cursor) / totalDays) * 100
+      const widthPct = (daysBetween(cursor, segEnd) / totalDays) * 100
+      months.push({ label: `${MONTHS[cursor.getMonth()]} ${String(cursor.getFullYear()).slice(2)}`, leftPct, widthPct })
+      cursor = next
+    }
+    return { min, max, totalDays, months }
+  }, [lots])
+
+  const barGeom = (lot: Lot) => {
+    if (!lot.start_date || !lot.end_date) return null
+    const s = new Date(lot.start_date)
+    const e = new Date(lot.end_date)
+    const left = (daysBetween(timeline.min, s) / timeline.totalDays) * 100
+    const width = Math.max((daysBetween(s, e) / timeline.totalDays) * 100, 1.5)
+    return { left, width }
+  }
+
+  const sortedLots = [...lots].sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at))
+
+  const handleCreateBlank = () => {
+    setCreating(true)
+    setEditingLot({
+      id: '', project_id: project.id, name: '', member_id: null, trade: null,
+      start_date: null, end_date: null, progress: 0, color: 'blue',
+      position: lots.length, created_at: '', updated_at: '',
+    })
+  }
+
+  const applyTemplate = async (tpl: PlanTemplate) => {
+    setApplyingTpl(true)
+    // Charger les lots du modèle
+    const { data: tplLots } = await supabase
+      .from('plan_template_lots')
+      .select('*')
+      .eq('template_id', tpl.id)
+      .order('position')
+
+    if (!tplLots || tplLots.length === 0) {
+      toast.error('Ce modèle ne contient aucun lot')
+      setApplyingTpl(false)
+      return
+    }
+
+    // Séquencer les dates à partir d'aujourd'hui
+    let cursor = new Date()
+    const rows = tplLots.map((tl, i) => {
+      const start = new Date(cursor)
+      const end = addDays(start, Math.max(tl.duration_days - 1, 0))
+      cursor = addDays(end, 1)
+      return {
+        project_id: project.id,
+        name: tl.name,
+        trade: tl.trade,
+        color: tl.color,
+        position: lots.length + i,
+        start_date: start.toISOString().slice(0, 10),
+        end_date: end.toISOString().slice(0, 10),
+        progress: 0,
+      }
+    })
+
+    const { data, error } = await supabase.from('lots').insert(rows).select('*, member:profiles(*)')
+    if (error) {
+      toast.error(`Erreur: ${error.message}`)
+    } else {
+      setLots(prev => [...prev, ...(data || [])])
+      toast.success(`${data?.length} lots créés depuis « ${tpl.name} »`)
+      setShowTemplates(false)
+    }
+    setApplyingTpl(false)
+  }
+
+  return (
+    <div className="h-full flex flex-col bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {/* Barre d'actions */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+        <LayoutGrid size={15} className="text-gray-500" />
+        <h3 className="font-semibold text-gray-800 text-sm flex-1">Plan de charge</h3>
+        {isAdmin && (
+          <>
+            <div className="relative">
+              <Button variant="outline" size="sm" className="gap-1 h-7 text-xs" onClick={() => setShowTemplates(v => !v)}>
+                <Wand2 size={12} /> Depuis un modèle
+              </Button>
+              {showTemplates && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setShowTemplates(false)} />
+                  <div className="absolute right-0 top-8 z-20 w-56 bg-white rounded-lg shadow-lg border border-gray-100 py-1">
+                    {templates.length === 0 ? (
+                      <p className="text-xs text-gray-400 px-3 py-2">Aucun modèle. Créez-en dans Paramètres.</p>
+                    ) : templates.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => applyTemplate(t)}
+                        disabled={applyingTpl}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 flex items-center gap-2"
+                      >
+                        {applyingTpl ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} className="text-orange-500" />}
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <Button size="sm" className="gap-1 h-7 text-xs bg-orange-500 hover:bg-orange-600" onClick={handleCreateBlank}>
+              <Plus size={12} /> Lot
+            </Button>
+          </>
+        )}
+      </div>
+
+      {/* Gantt */}
+      {sortedLots.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+          <LayoutGrid size={40} className="text-gray-300 mb-3" />
+          <p className="text-gray-500 font-medium">Aucun lot planifié</p>
+          {isAdmin && <p className="text-sm text-gray-400 mt-1">Créez un lot ou partez d&apos;un modèle</p>}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-auto">
+          <div className="min-w-[720px]">
+            {/* En-tête des mois */}
+            <div className="flex sticky top-0 z-10 bg-white border-b border-gray-200">
+              <div className="w-56 shrink-0 px-3 py-2 text-xs font-semibold text-gray-500 border-r border-gray-100">Lot / Adhérent</div>
+              <div className="flex-1 relative h-8">
+                {timeline.months.map((m, i) => (
+                  <div key={i} className="absolute top-0 h-full border-l border-gray-100 flex items-center px-1.5"
+                    style={{ left: `${m.leftPct}%`, width: `${m.widthPct}%` }}>
+                    <span className="text-[10px] font-medium text-gray-400 truncate">{m.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Lignes de lots */}
+            {sortedLots.map(lot => {
+              const g = barGeom(lot)
+              const colorClass = LOT_COLORS[lot.color] || LOT_COLORS.blue
+              return (
+                <div key={lot.id} className="flex items-stretch border-b border-gray-50 hover:bg-gray-50/60 group">
+                  {/* Colonne gauche */}
+                  <button
+                    onClick={() => setEditingLot(lot)}
+                    className="w-56 shrink-0 px-3 py-2 text-left border-r border-gray-100"
+                  >
+                    <p className="text-sm font-medium text-gray-800 truncate">{lot.name}</p>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      {lot.member ? (
+                        <span className="flex items-center gap-1 text-[11px] text-gray-500 truncate">
+                          <span className="w-4 h-4 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-[8px] font-bold">
+                            {(lot.member.full_name || 'U')[0].toUpperCase()}
+                          </span>
+                          {lot.member.company || lot.member.full_name}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-gray-300 italic">Non assigné</span>
+                      )}
+                    </div>
+                  </button>
+                  {/* Piste Gantt */}
+                  <button onClick={() => setEditingLot(lot)} className="flex-1 relative min-h-[44px]">
+                    {/* lignes de mois */}
+                    {timeline.months.map((m, i) => (
+                      <div key={i} className="absolute top-0 h-full border-l border-gray-50" style={{ left: `${m.leftPct}%` }} />
+                    ))}
+                    {g ? (
+                      <div
+                        className={`absolute top-1/2 -translate-y-1/2 h-5 rounded ${colorClass} shadow-sm overflow-hidden`}
+                        style={{ left: `${g.left}%`, width: `${g.width}%` }}
+                        title={`${lot.name} — ${lot.progress}%`}
+                      >
+                        <div className="h-full bg-black/25" style={{ width: `${lot.progress}%` }} />
+                        {lot.progress > 0 && (
+                          <span className="absolute inset-0 flex items-center justify-center text-[9px] text-white font-medium">{lot.progress}%</span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-300 italic">Sans dates</span>
+                    )}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {editingLot && (
+        <LotDialog
+          lot={editingLot}
+          isNew={creating}
+          isAdmin={isAdmin}
+          userId={user.id}
+          members={members}
+          onClose={() => { setEditingLot(null); setCreating(false) }}
+          onSaved={(l) => {
+            setLots(prev => {
+              const exists = prev.some(x => x.id === l.id)
+              return exists ? prev.map(x => x.id === l.id ? l : x) : [...prev, l]
+            })
+            setEditingLot(null); setCreating(false)
+          }}
+          onDeleted={(id) => { setLots(prev => prev.filter(x => x.id !== id)); setEditingLot(null); setCreating(false) }}
+        />
+      )}
+    </div>
+  )
+}

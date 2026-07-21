@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Profile, Trade } from '@/types'
+import { Profile, Trade, PlanTemplate, PlanTemplateLot } from '@/types'
 import { User } from '@supabase/supabase-js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import {
   ArrowLeft, Settings, Users, Wrench, Plus, Loader2, Trash2,
-  Mail, Phone, Building2, UserPlus, HardHat, KeyRound, Copy
+  Mail, Phone, Building2, UserPlus, HardHat, KeyRound, Copy, LayoutGrid, ChevronDown, ChevronRight
 } from 'lucide-react'
 
 interface Props {
@@ -19,20 +19,67 @@ interface Props {
   profile: Profile | null
   initialUsers: Profile[]
   initialTrades: Trade[]
+  initialTemplates: PlanTemplate[]
 }
 
-type Tab = 'users' | 'trades'
+type Tab = 'users' | 'trades' | 'templates'
 
 function genPassword() {
   return Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4).toUpperCase() + '!'
 }
 
-export default function SettingsClient({ user, profile, initialUsers, initialTrades }: Props) {
+export default function SettingsClient({ user, profile, initialUsers, initialTrades, initialTemplates }: Props) {
   const router = useRouter()
   const supabase = createClient()
   const [tab, setTab] = useState<Tab>('users')
   const [users, setUsers] = useState(initialUsers)
   const [trades, setTrades] = useState(initialTrades)
+  const [templates, setTemplates] = useState<PlanTemplate[]>(initialTemplates)
+
+  // --- Modèles de plan de charge ---
+  const [newTplName, setNewTplName] = useState('')
+  const [addingTpl, setAddingTpl] = useState(false)
+  const [openTpl, setOpenTpl] = useState<string | null>(null)
+  const [lotForm, setLotForm] = useState({ name: '', trade: '', duration_days: 7 })
+
+  const handleAddTemplate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newTplName.trim()) return
+    setAddingTpl(true)
+    const { data, error } = await supabase
+      .from('plan_templates')
+      .insert({ name: newTplName.trim(), created_by: user.id })
+      .select('*, lots:plan_template_lots(*)')
+      .single()
+    if (error) toast.error(`Erreur: ${error.message}`)
+    else { setTemplates(prev => [...prev, data]); setNewTplName(''); setOpenTpl(data.id); toast.success('Modèle créé') }
+    setAddingTpl(false)
+  }
+
+  const handleDeleteTemplate = async (id: string) => {
+    const { error } = await supabase.from('plan_templates').delete().eq('id', id)
+    if (error) toast.error(`Erreur: ${error.message}`)
+    else { setTemplates(prev => prev.filter(t => t.id !== id)); toast.success('Modèle supprimé') }
+  }
+
+  const handleAddLot = async (templateId: string) => {
+    if (!lotForm.name.trim()) return
+    const pos = (templates.find(t => t.id === templateId)?.lots?.length || 0) + 1
+    const { data, error } = await supabase
+      .from('plan_template_lots')
+      .insert({ template_id: templateId, name: lotForm.name.trim(), trade: lotForm.trade || null, duration_days: lotForm.duration_days, position: pos })
+      .select()
+      .single()
+    if (error) { toast.error(`Erreur: ${error.message}`); return }
+    setTemplates(prev => prev.map(t => t.id === templateId ? { ...t, lots: [...(t.lots || []), data] } : t))
+    setLotForm({ name: '', trade: '', duration_days: 7 })
+  }
+
+  const handleDeleteLot = async (templateId: string, lotId: string) => {
+    const { error } = await supabase.from('plan_template_lots').delete().eq('id', lotId)
+    if (error) { toast.error(`Erreur: ${error.message}`); return }
+    setTemplates(prev => prev.map(t => t.id === templateId ? { ...t, lots: (t.lots || []).filter(l => l.id !== lotId) } : t))
+  }
 
   // --- Création utilisateur ---
   const [form, setForm] = useState({
@@ -141,6 +188,14 @@ export default function SettingsClient({ user, profile, initialUsers, initialTra
           >
             <Wrench size={15} /> Corps de métier
           </button>
+          <button
+            onClick={() => setTab('templates')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              tab === 'templates' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'
+            }`}
+          >
+            <LayoutGrid size={15} /> Modèles de plan
+          </button>
         </div>
 
         {tab === 'users' ? (
@@ -243,7 +298,7 @@ export default function SettingsClient({ user, profile, initialUsers, initialTra
               </div>
             </div>
           </div>
-        ) : (
+        ) : tab === 'trades' ? (
           /* Corps de métier */
           <div className="max-w-xl">
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -274,6 +329,71 @@ export default function SettingsClient({ user, profile, initialUsers, initialTra
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        ) : (
+          /* Modèles de plan de charge */
+          <div className="max-w-2xl">
+            <p className="text-sm text-gray-500 mb-4">
+              Définissez des modèles réutilisables (liste de lots avec durées) pour générer rapidement le plan de charge d&apos;un projet.
+            </p>
+            <form onSubmit={handleAddTemplate} className="flex gap-2 mb-4">
+              <Input value={newTplName} onChange={e => setNewTplName(e.target.value)} placeholder="Nom du modèle (ex: Rénovation)" className="flex-1" />
+              <Button type="submit" className="bg-orange-500 hover:bg-orange-600" disabled={addingTpl}>
+                {addingTpl ? <Loader2 size={14} className="animate-spin mr-1" /> : <Plus size={14} className="mr-1" />} Modèle
+              </Button>
+            </form>
+
+            <div className="space-y-3">
+              {templates.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-8">Aucun modèle</p>
+              ) : templates.map(tpl => {
+                const open = openTpl === tpl.id
+                const lots = (tpl.lots || []).slice().sort((a, b) => a.position - b.position)
+                return (
+                  <div key={tpl.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-3 bg-gray-50">
+                      <button onClick={() => setOpenTpl(open ? null : tpl.id)} className="flex items-center gap-2 flex-1 text-left">
+                        {open ? <ChevronDown size={15} className="text-gray-400" /> : <ChevronRight size={15} className="text-gray-400" />}
+                        <span className="font-semibold text-gray-800 text-sm">{tpl.name}</span>
+                        <span className="text-xs text-gray-400">({lots.length} lots)</span>
+                      </button>
+                      <button onClick={() => handleDeleteTemplate(tpl.id)} className="text-gray-300 hover:text-red-500">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    {open && (
+                      <div className="p-3 space-y-1">
+                        {lots.map((l, i) => (
+                          <div key={l.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50">
+                            <span className="text-[10px] text-gray-400 font-mono w-5">{i + 1}</span>
+                            <span className="text-sm text-gray-700 flex-1">{l.name}</span>
+                            {l.trade && <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5">{l.trade}</span>}
+                            <span className="text-xs text-gray-400">{l.duration_days} j</span>
+                            <button onClick={() => handleDeleteLot(tpl.id, l.id)} className="text-gray-300 hover:text-red-500">
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))}
+                        <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100 mt-2">
+                          <Input value={lotForm.name} onChange={e => setLotForm({ ...lotForm, name: e.target.value })} placeholder="Nom du lot" className="flex-1 min-w-[120px] h-8 text-sm" />
+                          <select value={lotForm.trade} onChange={e => setLotForm({ ...lotForm, trade: e.target.value })} className="h-8 rounded-lg border border-input bg-white px-2 text-sm">
+                            <option value="">Métier…</option>
+                            {trades.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                          </select>
+                          <div className="flex items-center gap-1">
+                            <Input type="number" min={1} value={lotForm.duration_days} onChange={e => setLotForm({ ...lotForm, duration_days: Number(e.target.value) })} className="w-16 h-8 text-sm" />
+                            <span className="text-xs text-gray-400">jours</span>
+                          </div>
+                          <Button type="button" size="sm" className="h-8 bg-orange-500 hover:bg-orange-600" onClick={() => handleAddLot(tpl.id)}>
+                            <Plus size={13} />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}

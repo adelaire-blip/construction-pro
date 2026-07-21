@@ -7,10 +7,11 @@ export default async function SettingsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/auth/login')
 
-  const [profileRes, usersRes, tradesRes] = await Promise.all([
+  const [profileRes, usersRes, tradesRes, templatesRes] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', user.id).single(),
     supabase.from('profiles').select('*').order('created_at', { ascending: false }),
     supabase.from('trades').select('*').order('name'),
+    supabase.from('plan_templates').select('*, lots:plan_template_lots(*)').order('name'),
   ])
 
   return (
@@ -19,6 +20,7 @@ export default async function SettingsPage() {
       profile={profileRes.data}
       initialUsers={usersRes.data || []}
       initialTrades={tradesRes.data || []}
+      initialTemplates={templatesRes.data || []}
     />
   )
 }

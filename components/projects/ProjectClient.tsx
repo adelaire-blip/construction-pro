@@ -3,16 +3,17 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Project, Floor, ProjectMember, Profile } from '@/types'
+import { Project, Floor, ProjectMember, Profile, Lot, PlanTemplate } from '@/types'
 import { User } from '@supabase/supabase-js'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { ArrowLeft, Building2, MapPin, MessageSquare, Map, Users, Settings } from 'lucide-react'
+import { ArrowLeft, Building2, MapPin, MessageSquare, Map, Users, Settings, LayoutGrid } from 'lucide-react'
 import PlansPanel from '@/components/plans/PlansPanel'
 import ChatPanel from '@/components/chat/ChatPanel'
 import MembersPanel from '@/components/projects/MembersPanel'
+import PlanChargePanel from '@/components/plancharge/PlanChargePanel'
 
 const STATUS_COLOR = {
   en_cours: 'bg-blue-100 text-blue-700',
@@ -32,9 +33,11 @@ interface Props {
   project: Project
   initialFloors: Floor[]
   initialMembers: ProjectMember[]
+  initialLots: Lot[]
+  templates: PlanTemplate[]
 }
 
-export default function ProjectClient({ user, profile, project, initialFloors, initialMembers }: Props) {
+export default function ProjectClient({ user, profile, project, initialFloors, initialMembers, initialLots, templates }: Props) {
   const router = useRouter()
   const [floors, setFloors] = useState(initialFloors)
   const [members, setMembers] = useState(initialMembers)
@@ -77,6 +80,9 @@ export default function ProjectClient({ user, profile, project, initialFloors, i
             <TabsTrigger value="plans" className="gap-1.5 text-xs">
               <Map size={14} /> Plans
             </TabsTrigger>
+            <TabsTrigger value="plancharge" className="gap-1.5 text-xs">
+              <LayoutGrid size={14} /> Plan de charge
+            </TabsTrigger>
             <TabsTrigger value="chat" className="gap-1.5 text-xs">
               <MessageSquare size={14} /> Discussion
             </TabsTrigger>
@@ -92,6 +98,17 @@ export default function ProjectClient({ user, profile, project, initialFloors, i
               floors={floors}
               setFloors={setFloors}
               isOwner={isOwner}
+            />
+          </TabsContent>
+
+          <TabsContent value="plancharge" className="flex-1 overflow-hidden mt-3 mx-4 mb-4">
+            <PlanChargePanel
+              user={user}
+              project={project}
+              isAdmin={isOwner}
+              initialLots={initialLots}
+              members={members}
+              templates={templates}
             />
           </TabsContent>
 

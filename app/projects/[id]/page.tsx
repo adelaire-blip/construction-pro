@@ -11,14 +11,18 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const projectPromise = supabase.from('projects').select('*').eq('id', id).single()
   const floorsPromise = supabase.from('floors').select('*').eq('project_id', id).order('level')
   const membersPromise = supabase.from('project_members').select('*, profile:profiles(*)').eq('project_id', id)
+  const lotsPromise = supabase.from('lots').select('*, member:profiles(*)').eq('project_id', id).order('position')
+  const templatesPromise = supabase.from('plan_templates').select('*').order('name')
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/auth/login')
 
-  const [projectRes, floorsRes, membersRes, profileRes] = await Promise.all([
+  const [projectRes, floorsRes, membersRes, lotsRes, templatesRes, profileRes] = await Promise.all([
     projectPromise,
     floorsPromise,
     membersPromise,
+    lotsPromise,
+    templatesPromise,
     supabase.from('profiles').select('*').eq('id', user.id).single(),
   ])
 
@@ -36,6 +40,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
       project={project}
       initialFloors={floors || []}
       initialMembers={members || []}
+      initialLots={lotsRes.data || []}
+      templates={templatesRes.data || []}
     />
   )
 }
