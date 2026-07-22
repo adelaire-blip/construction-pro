@@ -13,12 +13,21 @@ interface Props {
 export default function MemberSelect({ members, value, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [activeTrade, setActiveTrade] = useState<string | null>(null)
 
   const selected = members.find(m => m.user_id === value)
+
+  // Liste des métiers présents (pour les tags de filtre)
+  const allTrades = useMemo(() => {
+    const set = new Set<string>()
+    members.forEach(m => { const t = m.profile?.trade?.trim(); if (t) set.add(t) })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [members])
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase()
     const filtered = members.filter(m => {
+      if (activeTrade && (m.profile?.trade?.trim() || '') !== activeTrade) return false
       if (!q) return true
       const p = m.profile
       return [p?.full_name, p?.company, p?.trade].some(v => v?.toLowerCase().includes(q))
@@ -35,16 +44,16 @@ export default function MemberSelect({ members, value, onChange }: Props) {
         trade,
         list: list.sort((a, b) => (a.profile?.company || a.profile?.full_name || '').localeCompare(b.profile?.company || b.profile?.full_name || '')),
       }))
-  }, [members, query])
+  }, [members, query, activeTrade])
 
-  const select = (id: string) => { onChange(id); setOpen(false); setQuery('') }
+  const select = (id: string) => { onChange(id); setOpen(false); setQuery(''); setActiveTrade(null) }
 
   return (
     <>
       {/* Champ déclencheur */}
       <button
         type="button"
-        onClick={() => { setOpen(true); setQuery('') }}
+        onClick={() => { setOpen(true); setQuery(''); setActiveTrade(null) }}
         className="mt-1 w-full min-h-9 rounded-lg border border-input bg-white px-2 py-1.5 text-sm flex items-center gap-2 text-left"
       >
         {selected ? (
@@ -86,6 +95,27 @@ export default function MemberSelect({ members, value, onChange }: Props) {
                 />
                 {query && <button onClick={() => setQuery('')} className="text-gray-300 hover:text-gray-500"><X size={15} /></button>}
               </div>
+            </div>
+
+            {/* Tags de filtre par métier */}
+            <div className="px-3 py-2 border-b border-gray-100 shrink-0 flex gap-1.5 overflow-x-auto no-scrollbar">
+              <button
+                type="button"
+                onClick={() => setActiveTrade(null)}
+                className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${!activeTrade ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                Tous
+              </button>
+              {allTrades.map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setActiveTrade(activeTrade === t ? null : t)}
+                  className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${activeTrade === t ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                >
+                  {t}
+                </button>
+              ))}
             </div>
 
             {/* Liste */}
