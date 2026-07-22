@@ -42,6 +42,7 @@ export default function ChatPanel({ user, profile, project }: Props) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const lastTs = useRef<string | null>(null)
@@ -124,58 +125,52 @@ export default function ChatPanel({ user, profile, project }: Props) {
     }
   }
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!text.trim()) return
-    setSending(true)
-    const content = text.trim()
-    setText('') // vider tout de suite pour la réactivité
-    const { data, error } = await supabase
-      .from('messages')
-      .insert({ project_id: project.id, user_id: user.id, content })
-      .select('*, profile:profiles(*)')
-      .single()
-    if (error) {
-      toast.error(`Erreur envoi: ${error.message}`)
-      setText(content) // restaurer en cas d'échec
-    } else if (data) {
-      mergeMessages([data]) // affichage immédiat
-    }
-    setSending(false)
-  }
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Met la pièce jointe en attente (aperçu) au lieu de l'envoyer tout de suite
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    setUploading(true)
-    const path = `${project.id}/${Date.now()}_${file.name}`
-    const { error: uploadError } = await supabase.storage
-      .from('attachments')
-      .upload(path, file)
+    setPendingFile(file)
+    if (fileRef.current) fileRef.current.value = ''
+  }
 
-    if (uploadError) {
-      toast.error('Erreur upload')
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const content = text.trim()
+    if (!content && !pendingFile) return
+    setSending(true)
+
+    let attachment_url: string | null = null
+    let attachment_type: 'image' | 'document' | null = null
+
+    // Upload de la pièce jointe si présente
+    if (pendingFile) {
+      setUploading(true)
+      const path = `${project.id}/${Date.now()}_${pendingFile.name}`
+      const { error: uploadError } = await supabase.storage.from('attachments').upload(path, pendingFile)
       setUploading(false)
-      return
+      if (uploadError) {
+        toast.error(`Erreur upload: ${uploadError.message}`)
+        setSending(false)
+        return
+      }
+      attachment_url = supabase.storage.from('attachments').getPublicUrl(path).data.publicUrl
+      attachment_type = pendingFile.type.startsWith('image/') ? 'image' : 'document'
     }
-
-    const { data: { publicUrl } } = supabase.storage.from('attachments').getPublicUrl(path)
-    const isImage = file.type.startsWith('image/')
 
     const { data, error } = await supabase
       .from('messages')
-      .insert({
-        project_id: project.id,
-        user_id: user.id,
-        attachment_url: publicUrl,
-        attachment_type: isImage ? 'image' : 'document',
-      })
+      .insert({ project_id: project.id, user_id: user.id, content: content || null, attachment_url, attachment_type })
       .select('*, profile:profiles(*)')
       .single()
-    if (error) toast.error(`Erreur envoi: ${error.message}`)
-    else if (data) mergeMessages([data])
-    setUploading(false)
-    if (fileRef.current) fileRef.current.value = ''
+
+    if (error) {
+      toast.error(`Erreur envoi: ${error.message}`)
+    } else if (data) {
+      mergeMessages([data])
+      setText('')
+      setPendingFile(null)
+    }
+    setSending(false)
   }
 
   const grouped = groupByDay(messages)
@@ -263,32 +258,52 @@ export default function ChatPanel({ user, profile, project }: Props) {
 
       {/* Input */}
       <div className="border-t border-gray-100 p-3 flex-shrink-0">
+        {/* Aperçu de la pièce jointe en attente */}
+        {pendingFile && (
+          <div className="mb-2 flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg p-2 w-fit max-w-full">
+            {pendingFile.type.startsWith('image/') ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={URL.createObjectURL(pendingFile)} alt="" className="w-12 h-12 rounded object-cover shrink-0" />
+            ) : (
+              <div className="w-12 h-12 rounded bg-orange-50 text-orange-500 flex items-center justify-center shrink-0">
+                <Paperclip size={18} />
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-gray-700 truncate max-w-[180px]">{pendingFile.name}</p>
+              <p className="text-[11px] text-gray-400">Ajoutez un texte puis envoyez</p>
+            </div>
+            <button type="button" onClick={() => setPendingFile(null)} className="ml-1 text-gray-400 hover:text-red-500 shrink-0">
+              <X size={16} />
+            </button>
+          </div>
+        )}
         <form onSubmit={handleSend} className="flex gap-2">
           <input
             type="file"
             ref={fileRef}
             className="hidden"
             accept="image/*,.pdf,.doc,.docx"
-            onChange={handleFileUpload}
+            onChange={handleFilePick}
           />
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={uploading}
             className="p-2 text-gray-400 hover:text-orange-500 transition-colors shrink-0"
+            title="Joindre une photo ou un document"
           >
-            {uploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+            <Paperclip size={18} />
           </button>
           <Input
             value={text}
             onChange={e => setText(e.target.value)}
-            placeholder="Votre message..."
+            placeholder={pendingFile ? 'Ajouter un message (optionnel)...' : 'Votre message...'}
             className="flex-1 h-10"
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e) } }}
           />
           <Button
             type="submit"
-            disabled={sending || !text.trim()}
+            disabled={sending || (!text.trim() && !pendingFile)}
             className="bg-orange-500 hover:bg-orange-600 h-10 px-3 shrink-0"
           >
             {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
