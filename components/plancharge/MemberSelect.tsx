@@ -75,7 +75,7 @@ export default function MemberSelect({ members, value, onChange }: Props) {
       {/* Écran de sélection plein format */}
       {open && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4" onClick={() => setOpen(false)}>
-          <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col h-[85vh] sm:h-[600px]" onClick={e => e.stopPropagation()}>
             {/* En-tête */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
               <h3 className="font-semibold text-gray-900">Choisir un adhérent</h3>
@@ -98,7 +98,7 @@ export default function MemberSelect({ members, value, onChange }: Props) {
             </div>
 
             {/* Tags de filtre par métier */}
-            <div className="px-3 py-2 border-b border-gray-100 shrink-0 flex gap-1.5 overflow-x-auto no-scrollbar">
+            <div className="px-3 py-2 border-b border-gray-100 shrink-0 flex flex-wrap gap-1.5 max-h-[112px] overflow-y-auto">
               <button
                 type="button"
                 onClick={() => setActiveTrade(null)}
