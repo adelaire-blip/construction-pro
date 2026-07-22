@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
-import { X, Loader2, Trash2, Check, Plus, CalendarPlus } from 'lucide-react'
+import { X, Loader2, Trash2, Check, CalendarPlus } from 'lucide-react'
+import MemberSelect from './MemberSelect'
 
 const COLORS = ['blue', 'red', 'green', 'yellow', 'orange', 'amber', 'teal', 'purple', 'cyan', 'gray', 'pink']
 const COLOR_BG: Record<string, string> = {
@@ -131,10 +132,7 @@ export default function LotDialog({ lot, isNew, isAdmin, userId, members, onClos
             </div>
             <div>
               <Label className="text-xs">Adhérent assigné</Label>
-              <select value={form.member_id} onChange={e => setForm({ ...form, member_id: e.target.value })} className="mt-1 w-full h-9 rounded-lg border border-input bg-white px-2 text-sm">
-                <option value="">— Non assigné —</option>
-                {members.map(m => <option key={m.user_id} value={m.user_id}>{m.profile?.full_name || 'Utilisateur'}{m.profile?.company ? ` — ${m.profile.company}` : ''}</option>)}
-              </select>
+              <MemberSelect members={members} value={form.member_id} onChange={(v) => setForm({ ...form, member_id: v })} />
             </div>
 
             {/* Créneaux */}

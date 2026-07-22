@@ -476,7 +476,12 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
               {ctxSub === 'member' && (
                 <div className="absolute right-full top-0 -mr-1 w-52 bg-white rounded-lg shadow-xl border border-gray-100 py-1 max-h-64 overflow-y-auto">
                   <button onClick={() => reassignLot(ctxMenu.lot, null)} className="w-full text-left px-3 py-2 text-gray-500 italic hover:bg-gray-50">— Non assigné —</button>
-                  {members.map(m => <button key={m.user_id} onClick={() => reassignLot(ctxMenu.lot, m.user_id)} className="w-full text-left px-3 py-2 text-gray-700 hover:bg-orange-50 truncate">{m.profile?.full_name || 'Utilisateur'}{m.profile?.company ? ` — ${m.profile.company}` : ''}</button>)}
+                  {[...members].sort((a, b) => (a.profile?.trade || 'zz').localeCompare(b.profile?.trade || 'zz') || (a.profile?.company || '').localeCompare(b.profile?.company || '')).map(m => (
+                    <button key={m.user_id} onClick={() => reassignLot(ctxMenu.lot, m.user_id)} className="w-full text-left px-3 py-1.5 hover:bg-orange-50">
+                      <span className="block text-gray-700 text-sm truncate">{m.profile?.company || m.profile?.full_name || 'Utilisateur'}</span>
+                      {m.profile?.trade && <span className="block text-[10px] text-gray-400 truncate">{m.profile.trade}</span>}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
