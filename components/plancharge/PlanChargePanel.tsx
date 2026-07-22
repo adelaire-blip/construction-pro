@@ -218,13 +218,19 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
     setLots(prev => prev.map(l => l.id === lot.id ? data : l)); toast.success(targetId ? 'Lot lié' : 'Lien retiré')
   }
 
-  // Ajouter un créneau à un lot
-  const addSlot = async (lot: Lot) => {
+  // Ajouter un créneau à un lot (positionné sur la semaine du clic droit si dispo)
+  const addSlot = async (lot: Lot, clientX?: number) => {
     setCtxMenu(null)
-    const existing = lot.slots || []
     let start: Date
-    if (existing.length) start = addDays(new Date(Math.max(...existing.map(s => new Date(s.end_date).getTime()))), 3)
-    else start = new Date()
+    const rect = timelineRef.current?.getBoundingClientRect()
+    if (clientX != null && rect && clientX >= rect.left && rect.width > 0) {
+      // Convertir la position du clic en date, puis caler sur le lundi de la semaine
+      const dayOffset = Math.round(((clientX - rect.left) / rect.width) * timeline.totalDays)
+      start = mondayOf(addDays(timeline.min, Math.max(0, dayOffset)))
+    } else {
+      const existing = lot.slots || []
+      start = existing.length ? addDays(new Date(Math.max(...existing.map(s => new Date(s.end_date).getTime()))), 3) : new Date()
+    }
     const end = addDays(start, 4)
     const { data, error } = await supabase.from('lot_slots').insert({ lot_id: lot.id, start_date: iso(start), end_date: iso(end) }).select().single()
     if (error) { toast.error(`Erreur: ${error.message}`); return }
@@ -466,7 +472,7 @@ export default function PlanChargePanel({ user, project, isAdmin, initialLots, m
           <div className="fixed z-50 w-56 bg-white rounded-lg shadow-xl border border-gray-100 py-1 text-sm" style={{ left: Math.min(ctxMenu.x, winW - 230), top: Math.min(ctxMenu.y, winH - 320) }}>
             <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 truncate border-b border-gray-50">{ctxMenu.lot.name}</div>
             <button onClick={() => { const l = ctxMenu.lot; setCtxMenu(null); setEditingLot(l) }} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><Pencil size={14} className="text-gray-400" /> Modifier</button>
-            <button onClick={() => addSlot(ctxMenu.lot)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><CalendarPlus size={14} className="text-gray-400" /> Ajouter un créneau</button>
+            <button onClick={() => addSlot(ctxMenu.lot, ctxMenu.x)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><CalendarPlus size={14} className="text-gray-400" /> Ajouter un créneau</button>
             {ctxMenu.slot && (
               <button onClick={() => deleteSlot(ctxMenu.lot, ctxMenu.slot!)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-50"><Scissors size={14} className="text-gray-400" /> Supprimer ce créneau</button>
             )}
